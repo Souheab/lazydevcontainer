@@ -22,7 +22,7 @@ const (
 	headerContentHeight = 2
 	shortFooterHeight   = 1
 	fullFooterHeight    = 3
-	rowHeight           = 1
+	rowHeight           = 3
 )
 
 // ContainerProvider is the read-only data source required by the TUI.
@@ -145,7 +145,7 @@ func (m Model) View() string {
 
 	sections := []string{
 		m.renderHeaderPane(),
-		m.renderContainerPane(),
+		m.renderMainPane(),
 		m.renderFooterPane(),
 	}
 
@@ -292,7 +292,7 @@ func (m Model) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	case tea.MouseWheelDown:
 		m.moveCursor(3)
 	case tea.MouseLeft:
-		row := msg.Y - headerPaneHeight() - 2
+		row := (msg.Y - headerPaneHeight() - 2) / rowHeight
 		if row >= 0 {
 			index := m.offset + row
 			if index >= 0 && index < len(m.visible) {
@@ -468,17 +468,24 @@ func (m Model) renderHeaderPane() string {
 	return m.styles.Pane.Width(paneInnerWidth(m.width)).Height(headerContentHeight).Render(body)
 }
 
-func (m Model) renderContainerPane() string {
+func (m Model) renderMainPane() string {
 	contentHeight := containerContentHeight(m.height, m.help.ShowAll)
 	bodyHeight := max(1, contentHeight-1)
-	body := m.renderRows(bodyHeight, paneContentWidth(m.width))
+	leftOuter, rightOuter := splitPaneOuterWidths(m.width)
+	leftContentWidth := splitPaneContentWidth(leftOuter)
+	rightContentWidth := splitPaneContentWidth(rightOuter)
+	listRows := max(1, bodyHeight/rowHeight)
+	body := m.renderRows(listRows, leftContentWidth)
 	title := fmt.Sprintf("Containers %d of %d", selectedPosition(m.cursor, len(m.visible)), len(m.visible))
 
 	if lipgloss.Height(body) < bodyHeight {
 		body += strings.Repeat("\n", bodyHeight-lipgloss.Height(body))
 	}
 
-	return m.styles.ActivePane.Width(paneInnerWidth(m.width)).Height(contentHeight).Render(m.styles.PaneTitle.Render(title) + "\n" + body)
+	listPane := m.styles.ActivePane.Width(splitPaneInnerWidth(leftOuter)).Height(contentHeight).Render(m.styles.PaneTitle.Render(title) + "\n" + body)
+	detailsPane := m.styles.Pane.Width(splitPaneInnerWidth(rightOuter)).Height(contentHeight).Render(m.styles.PaneTitle.Render("Details") + "\n" + m.renderDetails(bodyHeight, rightContentWidth))
+
+	return lipgloss.JoinHorizontal(lipgloss.Top, listPane, detailsPane)
 }
 
 func (m Model) renderRows(rows int, rowWidth int) string {
@@ -509,11 +516,6 @@ func (m Model) renderRows(rows int, rowWidth int) string {
 }
 
 func (m Model) renderRow(index int, container domain.Container, selected bool, rowWidth int) string {
-	badge := m.styles.BadgeDocker.Render("DOCKER")
-	if container.IsDevcontainer {
-		badge = m.styles.BadgeDev.Render("DEV")
-	}
-
 	status := container.Status
 	if status == "" {
 		status = container.State
@@ -524,53 +526,29 @@ func (m Model) renderRow(index int, container domain.Container, selected bool, r
 		selector = ">"
 	}
 
-	path := container.DevcontainerPath
-	pathText := ""
-	if path != "" {
-		pathText = " [" + path + "]"
-	}
-
-	prefixWidth := lipgloss.Width(selector) + 1 + lipgloss.Width(badge) + 1
+	prefixWidth := lipgloss.Width(selector) + 1
 	if status != "" {
 		status = truncate(status, max(1, rowWidth-prefixWidth-2))
 	}
 	statusWidth := lipgloss.Width(status)
-	spaceBeforeStatus := 1
-	if statusWidth > 0 {
-		spaceBeforeStatus = 2
-	}
-	availableMainWidth := max(1, rowWidth-prefixWidth-statusWidth-spaceBeforeStatus)
+	availableMainWidth := max(1, rowWidth-prefixWidth-statusWidth-2)
 	nameText := container.DisplayName()
 	name := truncate(nameText, availableMainWidth)
-	if pathText != "" {
-		nameWidth := lipgloss.Width(nameText)
-		pathWidth := lipgloss.Width(pathText)
-		if nameWidth+pathWidth <= availableMainWidth {
-			name = nameText
-		} else {
-			reservedPathWidth := 0
-			if availableMainWidth > 8 {
-				reservedPathWidth = max(4, availableMainWidth/3)
-			}
-			name = truncate(nameText, max(1, availableMainWidth-reservedPathWidth))
-			pathText = truncate(pathText, max(0, availableMainWidth-lipgloss.Width(name)))
-			if pathText == "" {
-				name = truncate(nameText, availableMainWidth)
-			}
-		}
-	}
 
-	mainWidth := lipgloss.Width(name) + lipgloss.Width(pathText)
-	gapWidth := max(1, rowWidth-prefixWidth-mainWidth-statusWidth)
-	row := fmt.Sprintf(
-		"%s %s %s%s%s%s",
+	gapWidth := max(1, rowWidth-prefixWidth-lipgloss.Width(name)-statusWidth)
+	firstLine := fmt.Sprintf(
+		"%s %s%s%s",
 		selector,
-		badge,
 		m.styles.Name.Render(name),
-		m.styles.Path.Render(pathText),
 		strings.Repeat(" ", gapWidth),
 		m.styles.Status.Render(status),
 	)
+	path := container.DevcontainerPath
+	if path == "" {
+		path = container.Image
+	}
+	secondLine := "  " + m.styles.Path.Render(truncate(path, max(0, rowWidth-2)))
+	row := lipgloss.JoinVertical(lipgloss.Left, firstLine, secondLine, "")
 	style := m.styles.Row.Width(rowWidth)
 	if selected {
 		style = m.styles.SelectedRow.Width(rowWidth)
@@ -578,6 +556,41 @@ func (m Model) renderRow(index int, container domain.Container, selected bool, r
 
 	_ = index
 	return style.Render(row)
+}
+
+func (m Model) renderDetails(bodyHeight int, width int) string {
+	if m.err != nil && len(m.containers) == 0 {
+		return fillHeight(m.styles.Empty.Render("Details unavailable"), bodyHeight)
+	}
+	if m.loading && len(m.containers) == 0 {
+		return fillHeight(m.styles.Empty.Render("Waiting for Docker..."), bodyHeight)
+	}
+	if len(m.visible) == 0 {
+		return fillHeight(m.styles.Empty.Render("Select a container to see details."), bodyHeight)
+	}
+
+	container := m.visible[m.cursor]
+	project := container.DevcontainerPath
+	if project == "" {
+		project = "Not detected"
+	}
+	status := container.Status
+	if status == "" {
+		status = container.State
+	}
+
+	lines := []string{}
+	lines = appendDetail(lines, "Project", project, width, m.styles)
+	lines = appendDetail(lines, "Image", container.Image, width, m.styles)
+	lines = appendDetail(lines, "Status", status, width, m.styles)
+	lines = appendDetail(lines, "Volumes", mountSummary(container.Mounts), width, m.styles)
+	lines = appendDetail(lines, "Ports", portSummary(container.Ports), width, m.styles)
+	body := strings.Join(lines, "\n")
+	if lipgloss.Height(body) > bodyHeight {
+		bodyLines := strings.Split(body, "\n")
+		body = strings.Join(bodyLines[:bodyHeight], "\n")
+	}
+	return fillHeight(body, bodyHeight)
 }
 
 func (m Model) renderFooterPane() string {
@@ -694,6 +707,62 @@ func wrap(value string, width int) string {
 	return strings.Join(lines, "\n")
 }
 
+func appendDetail(lines []string, label string, value string, width int, styles styles) []string {
+	if strings.TrimSpace(value) == "" {
+		value = "None"
+	}
+	lines = append(lines, styles.Subtle.Render(label))
+	for _, valueLine := range strings.Split(value, "\n") {
+		for _, line := range strings.Split(wrap(valueLine, width), "\n") {
+			lines = append(lines, truncate(line, width))
+		}
+	}
+	lines = append(lines, "")
+	return lines
+}
+
+func mountSummary(mounts []domain.Mount) string {
+	if len(mounts) == 0 {
+		return "None attached"
+	}
+	if len(mounts) == 1 {
+		return "1 attached"
+	}
+	return fmt.Sprintf("%d attached", len(mounts))
+}
+
+func portSummary(ports []domain.Port) string {
+	if len(ports) == 0 {
+		return "None published"
+	}
+
+	values := make([]string, 0, len(ports))
+	for _, port := range ports {
+		private := fmt.Sprintf("%d", port.PrivatePort)
+		if port.Type != "" && port.Type != "tcp" {
+			private += "/" + port.Type
+		}
+		if port.PublicPort == 0 {
+			values = append(values, private)
+			continue
+		}
+
+		public := fmt.Sprintf("%d", port.PublicPort)
+		if port.IP != "" && port.IP != "0.0.0.0" && port.IP != "::" {
+			public = port.IP + ":" + public
+		}
+		values = append(values, fmt.Sprintf("%s -> %s", public, private))
+	}
+	return strings.Join(values, "\n")
+}
+
+func fillHeight(value string, height int) string {
+	if lipgloss.Height(value) >= height {
+		return value
+	}
+	return value + strings.Repeat("\n", height-lipgloss.Height(value))
+}
+
 func filterModes() []containerfilter.Mode {
 	return []containerfilter.Mode{
 		containerfilter.ModeAll,
@@ -717,6 +786,23 @@ func paneInnerWidth(width int) int {
 
 func paneContentWidth(width int) int {
 	return max(16, width-6)
+}
+
+func splitPaneOuterWidths(width int) (int, int) {
+	if width < 56 {
+		left := max(18, width*55/100)
+		return left, max(1, width-left)
+	}
+	left := max(32, min(width-28, width*45/100))
+	return left, width - left
+}
+
+func splitPaneInnerWidth(width int) int {
+	return max(1, width-4)
+}
+
+func splitPaneContentWidth(width int) int {
+	return max(1, width-6)
 }
 
 func selectedPosition(cursor int, total int) int {

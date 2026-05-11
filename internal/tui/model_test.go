@@ -84,7 +84,7 @@ func TestFilteringKeepsCursorInBounds(t *testing.T) {
 	}
 }
 
-func TestRenderRowShowsOnlyBadgeNamePathAndRightAlignedUptime(t *testing.T) {
+func TestRenderRowShowsNamePathAndRightAlignedUptime(t *testing.T) {
 	m := testModel(nil)
 	container := domain.Container{
 		ID:               "abc123456789",
@@ -98,8 +98,9 @@ func TestRenderRowShowsOnlyBadgeNamePathAndRightAlignedUptime(t *testing.T) {
 
 	row := m.renderRow(0, container, false, 80)
 	plain := stripANSI(row)
+	lines := strings.Split(plain, "\n")
 
-	for _, want := range []string{"DEV", "reverent_hertz", "[/home/user/project]", "Up 58 minutes"} {
+	for _, want := range []string{"reverent_hertz", "/home/user/project", "Up 58 minutes"} {
 		if !strings.Contains(plain, want) {
 			t.Fatalf("rendered row %q does not contain %q", plain, want)
 		}
@@ -109,8 +110,8 @@ func TestRenderRowShowsOnlyBadgeNamePathAndRightAlignedUptime(t *testing.T) {
 			t.Fatalf("rendered row %q should not contain %q", plain, unwanted)
 		}
 	}
-	if !strings.HasSuffix(plain, "Up 58 minutes") {
-		t.Fatalf("uptime should be right aligned at row edge, got %q", plain)
+	if !strings.HasSuffix(lines[0], "Up 58 minutes") {
+		t.Fatalf("first line uptime should be right aligned at row edge, got %q", plain)
 	}
 	if got := lipgloss.Width(row); got != 80 {
 		t.Fatalf("row width = %d, want 80", got)
@@ -126,12 +127,41 @@ func TestRenderRowOmitsPathWhenUnavailable(t *testing.T) {
 	}
 
 	plain := stripANSI(m.renderRow(0, container, false, 60))
+	lines := strings.Split(plain, "\n")
 
 	if strings.Contains(plain, "[]") || strings.Contains(plain, "[") || strings.Contains(plain, "]") {
 		t.Fatalf("rendered row should not show path brackets without a path: %q", plain)
 	}
-	if !strings.Contains(plain, "plain_container") || !strings.HasSuffix(plain, "Up 2 minutes") {
+	if !strings.Contains(plain, "plain_container") || !strings.HasSuffix(lines[0], "Up 2 minutes") {
 		t.Fatalf("rendered row missing name or uptime: %q", plain)
+	}
+}
+
+func TestRenderMainPaneIncludesDetailsForSelectedContainer(t *testing.T) {
+	m := testModel([]domain.Container{
+		{
+			ID:               "1",
+			ShortID:          "111",
+			Name:             "api",
+			Image:            "golang:1.24",
+			Status:           "Up 1 hour",
+			DevcontainerPath: "/home/me/api",
+			Mounts: []domain.Mount{
+				{Type: "volume", Name: "workspace"},
+				{Type: "bind", Source: "/home/me/api"},
+			},
+			Ports: []domain.Port{
+				{PrivatePort: 3000, PublicPort: 3000, Type: "tcp"},
+			},
+		},
+	})
+
+	plain := stripANSI(m.renderMainPane())
+
+	for _, want := range []string{"Containers 1 of 1", "Details", "Project", "/home/me/api", "Image", "golang:1.24", "Volumes", "2 attached", "Ports", "3000 -> 3000"} {
+		if !strings.Contains(plain, want) {
+			t.Fatalf("rendered split pane %q does not contain %q", plain, want)
+		}
 	}
 }
 

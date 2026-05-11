@@ -11,6 +11,14 @@ type Mount struct {
 	ReadOnly    bool
 }
 
+// Port describes a published or exposed container port.
+type Port struct {
+	IP          string
+	PrivatePort uint16
+	PublicPort  uint16
+	Type        string
+}
+
 // Container is the application-level model used by filtering and the TUI.
 type Container struct {
 	ID                 string
@@ -24,6 +32,7 @@ type Container struct {
 	Created            time.Time
 	Labels             map[string]string
 	Mounts             []Mount
+	Ports              []Port
 	IsDevcontainer     bool
 	DevcontainerPath   string
 	DevcontainerSource string

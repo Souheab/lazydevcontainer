@@ -68,6 +68,7 @@ func fromSummary(summary container.Summary) domain.Container {
 		Created:            unixTime(summary.Created),
 		Labels:             labels,
 		Mounts:             mounts,
+		Ports:              convertPorts(summary.Ports),
 		IsDevcontainer:     detected.IsDevcontainer,
 		DevcontainerPath:   detected.Path,
 		DevcontainerSource: detected.Source,
@@ -102,6 +103,27 @@ func convertMounts(points []container.MountPoint) []domain.Mount {
 		})
 	}
 	return mounts
+}
+
+func convertPorts(summaries []container.PortSummary) []domain.Port {
+	if len(summaries) == 0 {
+		return nil
+	}
+
+	ports := make([]domain.Port, 0, len(summaries))
+	for _, summary := range summaries {
+		ip := ""
+		if summary.IP.IsValid() {
+			ip = summary.IP.String()
+		}
+		ports = append(ports, domain.Port{
+			IP:          ip,
+			PrivatePort: summary.PrivatePort,
+			PublicPort:  summary.PublicPort,
+			Type:        summary.Type,
+		})
+	}
+	return ports
 }
 
 func normalizeNames(names []string) []string {

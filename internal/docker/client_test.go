@@ -1,6 +1,7 @@
 package docker
 
 import (
+	"net/netip"
 	"testing"
 	"time"
 
@@ -21,6 +22,14 @@ func TestFromSummaryIncludesOrdinaryContainer(t *testing.T) {
 		State:   container.StateRunning,
 		Status:  "Up 5 minutes",
 		Created: 1710000000,
+		Ports: []container.PortSummary{
+			{
+				IP:          netip.MustParseAddr("127.0.0.1"),
+				PrivatePort: 5432,
+				PublicPort:  15432,
+				Type:        "tcp",
+			},
+		},
 		Labels: map[string]string{
 			"com.example.service": "database",
 		},
@@ -47,6 +56,9 @@ func TestFromSummaryIncludesOrdinaryContainer(t *testing.T) {
 	}
 	if got.Image != "postgres:16" || got.Status != "Up 5 minutes" || got.State != string(container.StateRunning) {
 		t.Fatalf("unexpected mapped container fields: %+v", got)
+	}
+	if len(got.Ports) != 1 || got.Ports[0].IP != "127.0.0.1" || got.Ports[0].PublicPort != 15432 || got.Ports[0].PrivatePort != 5432 {
+		t.Fatalf("unexpected mapped ports: %+v", got.Ports)
 	}
 	if got.Created != time.Unix(1710000000, 0) {
 		t.Fatalf("created = %v, want %v", got.Created, time.Unix(1710000000, 0))
