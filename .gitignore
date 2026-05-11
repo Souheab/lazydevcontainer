@@ -10,3 +10,6 @@ coverage.out
 
 # Local editor files
 .vscode/
+
+# nix build artifacts
+result
