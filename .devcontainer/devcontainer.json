@@ -4,6 +4,10 @@
   "features": {
     "ghcr.io/devcontainers/features/go:1": {
       "version": "latest"
+    },
+    "ghcr.io/devcontainers/features/nix:1": {
+      "version": "latest",
+      "extraNixConfig": "experimental-features = nix-command flakes\ntrusted-users = root vscode"
     }
   },
   "customizations": {
