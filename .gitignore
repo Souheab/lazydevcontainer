@@ -1,0 +1,12 @@
+# Build output
+/lazydc
+/dist/
+/bin/
+
+# Go
+*.test
+*.out
+coverage.out
+
+# Local editor files
+.vscode/
