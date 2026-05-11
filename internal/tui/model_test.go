@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"regexp"
 	"strings"
 	"testing"
@@ -137,6 +138,27 @@ func TestRenderRowOmitsPathWhenUnavailable(t *testing.T) {
 	}
 }
 
+func TestRenderSelectedRowUsesDarkBlueAcrossWholeRow(t *testing.T) {
+	m := testModel(nil)
+	container := domain.Container{
+		Name:             "api",
+		Status:           "Up 2 minutes",
+		IsDevcontainer:   true,
+		DevcontainerPath: "/workspaces/api",
+	}
+
+	row := m.renderRow(0, container, true, 60)
+
+	if got := fmt.Sprint(m.styles.SelectedRow.GetBackground()); got != "18" {
+		t.Fatalf("selected row background = %q, want dark blue color 18", got)
+	}
+	for _, want := range []string{"api", "Up 2 minutes", "/workspaces/api"} {
+		if !strings.Contains(stripANSI(row), want) {
+			t.Fatalf("selected row %q does not contain %q", stripANSI(row), want)
+		}
+	}
+}
+
 func TestRenderMainPaneIncludesDetailsForSelectedContainer(t *testing.T) {
 	m := testModel([]domain.Container{
 		{
@@ -145,6 +167,7 @@ func TestRenderMainPaneIncludesDetailsForSelectedContainer(t *testing.T) {
 			Name:             "api",
 			Image:            "golang:1.24",
 			Status:           "Up 1 hour",
+			IsDevcontainer:   true,
 			DevcontainerPath: "/home/me/api",
 			Mounts: []domain.Mount{
 				{Type: "volume", Name: "workspace"},
@@ -158,10 +181,66 @@ func TestRenderMainPaneIncludesDetailsForSelectedContainer(t *testing.T) {
 
 	plain := stripANSI(m.renderMainPane())
 
-	for _, want := range []string{"Containers 1 of 1", "Details", "Project", "/home/me/api", "Image", "golang:1.24", "Volumes", "2 attached", "Ports", "3000 -> 3000"} {
+	for _, want := range []string{"Containers 1 of 1", "Details", "Container Type", "Devcontainer", "Project", "/home/me/api", "Image", "golang:1.24", "Volumes", "2 attached", "Ports", "3000 -> 3000"} {
 		if !strings.Contains(plain, want) {
 			t.Fatalf("rendered split pane %q does not contain %q", plain, want)
 		}
+	}
+}
+
+func TestRenderHeaderAndFooterUseSimplifiedLabels(t *testing.T) {
+	m := testModel([]domain.Container{
+		{ID: "1", ShortID: "111", Name: "api", IsDevcontainer: true},
+		{ID: "2", ShortID: "222", Name: "db"},
+	})
+
+	header := stripANSI(m.renderHeaderPane())
+	footer := stripANSI(m.renderFooterPane())
+
+	for _, unwanted := range []string{"lazydc", "read-only devcontainer viewer"} {
+		if strings.Contains(header, unwanted) {
+			t.Fatalf("header should not contain %q: %q", unwanted, header)
+		}
+	}
+	for _, unwanted := range []string{"1/2", "global:"} {
+		if strings.Contains(footer, unwanted) {
+			t.Fatalf("footer should not contain %q: %q", unwanted, footer)
+		}
+	}
+	if !strings.Contains(header, "Status") || !strings.Contains(footer, "Keybindings") {
+		t.Fatalf("header/footer missing titles: header=%q footer=%q", header, footer)
+	}
+	if !strings.Contains(strings.Split(header, "\n")[0], "Status") {
+		t.Fatalf("header title should render in top border: %q", header)
+	}
+	if !strings.Contains(strings.Split(footer, "\n")[0], "Keybindings") {
+		t.Fatalf("footer title should render in top border: %q", footer)
+	}
+}
+
+func TestPanesUseFullConfiguredWidth(t *testing.T) {
+	m := testModel([]domain.Container{{ID: "1", ShortID: "111", Name: "api"}})
+
+	for name, view := range map[string]string{
+		"header": m.renderHeaderPane(),
+		"main":   m.renderMainPane(),
+		"footer": m.renderFooterPane(),
+	} {
+		if got := lipgloss.Width(view); got != m.width {
+			t.Fatalf("%s width = %d, want %d", name, got, m.width)
+		}
+	}
+}
+
+func TestViewFitsConfiguredSize(t *testing.T) {
+	m := testModel([]domain.Container{{ID: "1", ShortID: "111", Name: "api"}})
+	view := m.View()
+
+	if got := lipgloss.Width(view); got != m.width {
+		t.Fatalf("view width = %d, want %d", got, m.width)
+	}
+	if got := lipgloss.Height(view); got != m.height {
+		t.Fatalf("view height = %d, want %d", got, m.height)
 	}
 }
 

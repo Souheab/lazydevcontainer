@@ -19,7 +19,7 @@ import (
 
 const (
 	loadTimeout         = 10 * time.Second
-	headerContentHeight = 2
+	headerContentHeight = 1
 	shortFooterHeight   = 1
 	fullFooterHeight    = 3
 	rowHeight           = 3
@@ -390,7 +390,7 @@ func (m *Model) ensureCursorVisible() {
 }
 
 func (m Model) visibleRowCount() int {
-	rows := (containerContentHeight(m.height, m.help.ShowAll) - 1) / rowHeight
+	rows := containerContentHeight(m.height, m.help.ShowAll) / rowHeight
 	if rows < 1 {
 		return 1
 	}
@@ -413,7 +413,7 @@ func footerPaneHeight(showAll bool) int {
 }
 
 func containerPaneHeight(height int, showAll bool) int {
-	available := height - headerPaneHeight() - footerPaneHeight(showAll)
+	available := height - headerPaneHeight() - footerPaneHeight(showAll) - 2
 	if available < 3 {
 		return 3
 	}
@@ -462,15 +462,14 @@ func (m Model) renderHeaderPane() string {
 		status += "  refresh failed"
 	}
 
-	title := lipgloss.JoinHorizontal(lipgloss.Center, m.styles.PaneTitle.Render("Status"), " ", m.styles.Title.Render("lazydc"), " ", m.styles.Subtle.Render("read-only devcontainer viewer"))
-	body := strings.Join([]string{title, m.styles.Header.Render(truncate(status, paneContentWidth(m.width)))}, "\n")
+	body := m.styles.Header.Render(truncate(status, paneContentWidth(m.width)))
 
-	return m.styles.Pane.Width(paneInnerWidth(m.width)).Height(headerContentHeight).Render(body)
+	return renderTitledPane(m.styles.Pane, m.styles.PaneBorder, m.styles.PaneTitle, "Status", body, paneInnerWidth(m.width), headerContentHeight)
 }
 
 func (m Model) renderMainPane() string {
 	contentHeight := containerContentHeight(m.height, m.help.ShowAll)
-	bodyHeight := max(1, contentHeight-1)
+	bodyHeight := max(1, contentHeight)
 	leftOuter, rightOuter := splitPaneOuterWidths(m.width)
 	leftContentWidth := splitPaneContentWidth(leftOuter)
 	rightContentWidth := splitPaneContentWidth(rightOuter)
@@ -482,8 +481,8 @@ func (m Model) renderMainPane() string {
 		body += strings.Repeat("\n", bodyHeight-lipgloss.Height(body))
 	}
 
-	listPane := m.styles.ActivePane.Width(splitPaneInnerWidth(leftOuter)).Height(contentHeight).Render(m.styles.PaneTitle.Render(title) + "\n" + body)
-	detailsPane := m.styles.Pane.Width(splitPaneInnerWidth(rightOuter)).Height(contentHeight).Render(m.styles.PaneTitle.Render("Details") + "\n" + m.renderDetails(bodyHeight, rightContentWidth))
+	listPane := renderTitledPane(m.styles.ActivePane, m.styles.ActiveBorder, m.styles.PaneTitle, title, body, splitPaneInnerWidth(leftOuter), contentHeight)
+	detailsPane := renderTitledPane(m.styles.Pane, m.styles.PaneBorder, m.styles.PaneTitle, "Details", m.renderDetails(bodyHeight, rightContentWidth), splitPaneInnerWidth(rightOuter), contentHeight)
 
 	return lipgloss.JoinHorizontal(lipgloss.Top, listPane, detailsPane)
 }
@@ -536,18 +535,26 @@ func (m Model) renderRow(index int, container domain.Container, selected bool, r
 	name := truncate(nameText, availableMainWidth)
 
 	gapWidth := max(1, rowWidth-prefixWidth-lipgloss.Width(name)-statusWidth)
-	firstLine := fmt.Sprintf(
-		"%s %s%s%s",
-		selector,
-		m.styles.Name.Render(name),
-		strings.Repeat(" ", gapWidth),
-		m.styles.Status.Render(status),
-	)
+	renderedName := m.styles.Name.Render(name)
+	renderedStatus := m.styles.Status.Render(status)
 	path := container.DevcontainerPath
 	if path == "" {
 		path = container.Image
 	}
-	secondLine := "  " + m.styles.Path.Render(truncate(path, max(0, rowWidth-2)))
+	renderedPath := m.styles.Path.Render(truncate(path, max(0, rowWidth-2)))
+	if selected {
+		renderedName = name
+		renderedStatus = status
+		renderedPath = truncate(path, max(0, rowWidth-2))
+	}
+	firstLine := fmt.Sprintf(
+		"%s %s%s%s",
+		selector,
+		renderedName,
+		strings.Repeat(" ", gapWidth),
+		renderedStatus,
+	)
+	secondLine := "  " + renderedPath
 	row := lipgloss.JoinVertical(lipgloss.Left, firstLine, secondLine, "")
 	style := m.styles.Row.Width(rowWidth)
 	if selected {
@@ -580,6 +587,7 @@ func (m Model) renderDetails(bodyHeight int, width int) string {
 	}
 
 	lines := []string{}
+	lines = appendDetail(lines, "Container Type", containerType(container), width, m.styles)
 	lines = appendDetail(lines, "Project", project, width, m.styles)
 	lines = appendDetail(lines, "Image", container.Image, width, m.styles)
 	lines = appendDetail(lines, "Status", status, width, m.styles)
@@ -594,20 +602,8 @@ func (m Model) renderDetails(bodyHeight int, width int) string {
 }
 
 func (m Model) renderFooterPane() string {
-	position := ""
-	if len(m.visible) > 0 {
-		position = fmt.Sprintf("%d/%d", m.cursor+1, len(m.visible))
-	}
-	footer := m.styles.PaneTitle.Render("Keybindings")
-	if position != "" {
-		footer += " " + m.styles.Subtle.Render(position)
-	}
-	footer += "\n"
-	if position != "" {
-		footer += m.styles.Subtle.Render("global: ")
-	}
-	footer += m.styles.Help.Render(m.help.View(m.keys))
-	return m.styles.Pane.Width(paneInnerWidth(m.width)).Height(footerContentHeight(m.help.ShowAll)).Render(footer)
+	footer := m.styles.Help.Render(m.help.View(m.keys))
+	return renderTitledPane(m.styles.Pane, m.styles.PaneBorder, m.styles.PaneTitle, "Keybindings", footer, paneInnerWidth(m.width), footerContentHeight(m.help.ShowAll))
 }
 
 func (m Model) renderModal() string {
@@ -756,11 +752,35 @@ func portSummary(ports []domain.Port) string {
 	return strings.Join(values, "\n")
 }
 
+func containerType(container domain.Container) string {
+	if container.IsDevcontainer {
+		return "Devcontainer"
+	}
+	return "Docker Container"
+}
+
 func fillHeight(value string, height int) string {
 	if lipgloss.Height(value) >= height {
 		return value
 	}
 	return value + strings.Repeat("\n", height-lipgloss.Height(value))
+}
+
+func renderTitledPane(style lipgloss.Style, borderStyle lipgloss.Style, titleStyle lipgloss.Style, title string, body string, width int, height int) string {
+	pane := style.Width(width).Height(height).Render(body)
+	lines := strings.Split(pane, "\n")
+	if len(lines) == 0 {
+		return pane
+	}
+
+	lineWidth := lipgloss.Width(lines[0])
+	maxTitleWidth := max(0, lineWidth-4)
+	renderedTitle := titleStyle.Render(truncate(title, maxTitleWidth))
+	titleWidth := lipgloss.Width(renderedTitle)
+	fillWidth := max(0, lineWidth-titleWidth-2)
+
+	lines[0] = borderStyle.Render("╭") + renderedTitle + borderStyle.Render(strings.Repeat("─", fillWidth)+"╮")
+	return strings.Join(lines, "\n")
 }
 
 func filterModes() []containerfilter.Mode {
@@ -781,11 +801,11 @@ func filterIndex(mode containerfilter.Mode) int {
 }
 
 func paneInnerWidth(width int) int {
-	return max(20, width-4)
+	return max(20, width-2)
 }
 
 func paneContentWidth(width int) int {
-	return max(16, width-6)
+	return max(16, width-4)
 }
 
 func splitPaneOuterWidths(width int) (int, int) {
@@ -798,11 +818,11 @@ func splitPaneOuterWidths(width int) (int, int) {
 }
 
 func splitPaneInnerWidth(width int) int {
-	return max(1, width-4)
+	return max(1, width-2)
 }
 
 func splitPaneContentWidth(width int) int {
-	return max(1, width-6)
+	return max(1, width-4)
 }
 
 func selectedPosition(cursor int, total int) int {
