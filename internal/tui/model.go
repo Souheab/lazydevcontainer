@@ -18,9 +18,11 @@ import (
 )
 
 const (
-	loadTimeout  = 10 * time.Second
-	headerHeight = 4
-	rowHeight    = 2
+	loadTimeout         = 10 * time.Second
+	headerContentHeight = 2
+	shortFooterHeight   = 1
+	fullFooterHeight    = 3
+	rowHeight           = 1
 )
 
 // ContainerProvider is the read-only data source required by the TUI.
@@ -32,6 +34,14 @@ type containersLoadedMsg struct {
 	containers []domain.Container
 	err        error
 }
+
+type modalMode int
+
+const (
+	modalNone modalMode = iota
+	modalSearch
+	modalFilter
+)
 
 // Model is the Bubble Tea application state.
 type Model struct {
@@ -47,7 +57,9 @@ type Model struct {
 
 	filterMode containerfilter.Mode
 	query      string
-	searchMode bool
+	modal      modalMode
+
+	filterCursor int
 
 	cursor int
 	offset int
@@ -62,7 +74,7 @@ type Model struct {
 func New(provider ContainerProvider) Model {
 	styles := newStyles()
 	searchInput := textinput.New()
-	searchInput.Prompt = "search › "
+	searchInput.Prompt = "/ "
 	searchInput.Placeholder = "name, image, status, path, label..."
 	searchInput.CharLimit = 256
 	searchInput.PromptStyle = styles.Subtle
@@ -92,7 +104,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
-		m.searchInput.Width = max(10, msg.Width-14)
+		m.searchInput.Width = max(10, min(56, msg.Width-12))
 		m.ensureCursorVisible()
 		return m, nil
 
@@ -110,8 +122,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyMsg:
-		if m.searchMode {
+		if m.modal == modalSearch {
 			return m.updateSearch(msg)
+		}
+		if m.modal == modalFilter {
+			return m.updateFilterModal(msg)
 		}
 		return m.updateKey(msg)
 
@@ -129,12 +144,16 @@ func (m Model) View() string {
 	}
 
 	sections := []string{
-		m.renderHeader(),
-		m.renderRows(),
-		m.renderFooter(),
+		m.renderHeaderPane(),
+		m.renderContainerPane(),
+		m.renderFooterPane(),
 	}
 
-	return m.styles.App.Width(max(0, m.width-2)).Render(strings.Join(sections, "\n"))
+	view := m.styles.App.Width(max(0, m.width)).Height(max(0, m.height)).Render(strings.Join(sections, "\n"))
+	if m.modal != modalNone {
+		return m.renderModal()
+	}
+	return view
 }
 
 func (m Model) updateSearch(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -142,7 +161,11 @@ func (m Model) updateSearch(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, m.keys.Quit):
 		return m, tea.Quit
 	case key.Matches(msg, m.keys.Cancel):
-		m.searchMode = false
+		m.modal = modalNone
+		m.searchInput.Blur()
+		return m, nil
+	case key.Matches(msg, m.keys.Confirm):
+		m.modal = modalNone
 		m.searchInput.Blur()
 		return m, nil
 	}
@@ -168,9 +191,13 @@ func (m Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.err = nil
 		return m, loadContainers(m.provider)
 	case key.Matches(msg, m.keys.Search):
-		m.searchMode = true
+		m.modal = modalSearch
 		m.searchInput.Focus()
 		return m, textinput.Blink
+	case key.Matches(msg, m.keys.FilterMenu):
+		m.modal = modalFilter
+		m.filterCursor = filterIndex(m.filterMode)
+		return m, nil
 	case key.Matches(msg, m.keys.Cancel):
 		if m.query != "" {
 			m.query = ""
@@ -221,6 +248,43 @@ func (m Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+func (m Model) updateFilterModal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch {
+	case key.Matches(msg, m.keys.Quit):
+		return m, tea.Quit
+	case key.Matches(msg, m.keys.Cancel):
+		m.modal = modalNone
+		return m, nil
+	case key.Matches(msg, m.keys.Up):
+		m.filterCursor = (m.filterCursor + len(filterModes()) - 1) % len(filterModes())
+		return m, nil
+	case key.Matches(msg, m.keys.Down):
+		m.filterCursor = (m.filterCursor + 1) % len(filterModes())
+		return m, nil
+	case key.Matches(msg, m.keys.FilterAll):
+		m.filterCursor = filterIndex(containerfilter.ModeAll)
+		m.setFilter(containerfilter.ModeAll)
+		m.modal = modalNone
+		return m, nil
+	case key.Matches(msg, m.keys.FilterDev):
+		m.filterCursor = filterIndex(containerfilter.ModeDevcontainers)
+		m.setFilter(containerfilter.ModeDevcontainers)
+		m.modal = modalNone
+		return m, nil
+	case key.Matches(msg, m.keys.FilterDocker):
+		m.filterCursor = filterIndex(containerfilter.ModeContainers)
+		m.setFilter(containerfilter.ModeContainers)
+		m.modal = modalNone
+		return m, nil
+	case key.Matches(msg, m.keys.Confirm):
+		m.setFilter(filterModes()[m.filterCursor])
+		m.modal = modalNone
+		return m, nil
+	}
+
+	return m, nil
+}
+
 func (m Model) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	switch msg.Type {
 	case tea.MouseWheelUp:
@@ -228,7 +292,7 @@ func (m Model) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	case tea.MouseWheelDown:
 		m.moveCursor(3)
 	case tea.MouseLeft:
-		row := (msg.Y - headerHeight) / rowHeight
+		row := msg.Y - headerPaneHeight() - 2
 		if row >= 0 {
 			index := m.offset + row
 			if index >= 0 && index < len(m.visible) {
@@ -326,22 +390,38 @@ func (m *Model) ensureCursorVisible() {
 }
 
 func (m Model) visibleRowCount() int {
-	available := m.height - headerHeight - footerHeight(m.help.ShowAll)
-	if available <= 0 {
-		available = 12
-	}
-	rows := available / rowHeight
+	rows := (containerContentHeight(m.height, m.help.ShowAll) - 1) / rowHeight
 	if rows < 1 {
 		return 1
 	}
 	return rows
 }
 
-func footerHeight(showAll bool) int {
+func footerContentHeight(showAll bool) int {
 	if showAll {
-		return 4
+		return fullFooterHeight
 	}
-	return 2
+	return shortFooterHeight
+}
+
+func headerPaneHeight() int {
+	return headerContentHeight + 2
+}
+
+func footerPaneHeight(showAll bool) int {
+	return footerContentHeight(showAll) + 2
+}
+
+func containerPaneHeight(height int, showAll bool) int {
+	available := height - headerPaneHeight() - footerPaneHeight(showAll)
+	if available < 3 {
+		return 3
+	}
+	return available
+}
+
+func containerContentHeight(height int, showAll bool) int {
+	return max(1, containerPaneHeight(height, showAll)-2)
 }
 
 func (m Model) selectedID() string {
@@ -363,7 +443,7 @@ func (m *Model) selectID(id string) {
 	}
 }
 
-func (m Model) renderHeader() string {
+func (m Model) renderHeaderPane() string {
 	devCount := 0
 	for _, container := range m.containers {
 		if container.IsDevcontainer {
@@ -371,108 +451,126 @@ func (m Model) renderHeader() string {
 		}
 	}
 
-	status := fmt.Sprintf("%d total • %d devcontainers • %d shown • filter: %s", len(m.containers), devCount, len(m.visible), m.filterMode)
+	status := fmt.Sprintf("%d total  %d devcontainers  %d shown  filter: %s", len(m.containers), devCount, len(m.visible), m.filterMode)
 	if m.loading {
-		status += " • refreshing…"
+		status += "  refreshing..."
 	}
 	if m.query != "" {
-		status += fmt.Sprintf(" • search: %q", m.query)
+		status += fmt.Sprintf("  search: %q", m.query)
+	}
+	if m.err != nil {
+		status += "  refresh failed"
 	}
 
-	title := lipgloss.JoinHorizontal(lipgloss.Center, m.styles.Title.Render("lazydc"), " ", m.styles.Subtle.Render("read-only devcontainer viewer"))
-	search := m.renderSearchLine()
-	divider := m.styles.Divider.Render(strings.Repeat("─", max(0, m.width-2)))
+	title := lipgloss.JoinHorizontal(lipgloss.Center, m.styles.PaneTitle.Render("Status"), " ", m.styles.Title.Render("lazydc"), " ", m.styles.Subtle.Render("read-only devcontainer viewer"))
+	body := strings.Join([]string{title, m.styles.Header.Render(truncate(status, paneContentWidth(m.width)))}, "\n")
 
-	return strings.Join([]string{
-		title,
-		m.styles.Header.Render(status),
-		search,
-		divider,
-	}, "\n")
+	return m.styles.Pane.Width(paneInnerWidth(m.width)).Height(headerContentHeight).Render(body)
 }
 
-func (m Model) renderSearchLine() string {
-	if m.searchMode {
-		return m.searchInput.View()
+func (m Model) renderContainerPane() string {
+	contentHeight := containerContentHeight(m.height, m.help.ShowAll)
+	bodyHeight := max(1, contentHeight-1)
+	body := m.renderRows(bodyHeight, paneContentWidth(m.width))
+	title := fmt.Sprintf("Containers %d of %d", selectedPosition(m.cursor, len(m.visible)), len(m.visible))
+
+	if lipgloss.Height(body) < bodyHeight {
+		body += strings.Repeat("\n", bodyHeight-lipgloss.Height(body))
 	}
 
-	query := "press / to search"
-	if m.query != "" {
-		query = "search: " + m.query + "  (esc clears)"
-	}
-	return m.styles.Subtle.Render(query + " • a all • d devcontainers • o containers • tab/h/l cycle")
+	return m.styles.ActivePane.Width(paneInnerWidth(m.width)).Height(contentHeight).Render(m.styles.PaneTitle.Render(title) + "\n" + body)
 }
 
-func (m Model) renderRows() string {
+func (m Model) renderRows(rows int, rowWidth int) string {
 	if m.err != nil && len(m.containers) == 0 {
-		return m.styles.Empty.Render(m.styles.Error.Render("Could not load Docker containers") + "\n" + wrap(m.err.Error(), max(40, m.width-6)))
+		return m.styles.Empty.Render(m.styles.Error.Render("Could not load Docker containers") + "\n" + wrap(m.err.Error(), max(24, rowWidth)))
 	}
 
 	if m.loading && len(m.containers) == 0 {
-		return m.styles.Empty.Render("Loading Docker containers…")
+		return m.styles.Empty.Render("Loading Docker containers...")
 	}
 
 	if len(m.visible) == 0 {
 		return m.styles.Empty.Render(m.emptyMessage())
 	}
 
-	rows := m.visibleRowCount()
 	end := min(len(m.visible), m.offset+rows)
 	rendered := make([]string, 0, end-m.offset+1)
 
 	if m.err != nil {
-		rendered = append(rendered, m.styles.Error.Render("Refresh failed: ")+wrap(m.err.Error(), max(40, m.width-20)))
+		rendered = append(rendered, m.styles.Error.Render("Refresh failed: ")+wrap(m.err.Error(), max(24, rowWidth-16)))
 	}
 
 	for index := m.offset; index < end; index++ {
-		rendered = append(rendered, m.renderRow(index, m.visible[index], index == m.cursor))
+		rendered = append(rendered, m.renderRow(index, m.visible[index], index == m.cursor, rowWidth))
 	}
 
 	return strings.Join(rendered, "\n")
 }
 
-func (m Model) renderRow(index int, container domain.Container, selected bool) string {
-	rowWidth := max(24, m.width-4)
+func (m Model) renderRow(index int, container domain.Container, selected bool, rowWidth int) string {
 	badge := m.styles.BadgeDocker.Render("DOCKER")
 	if container.IsDevcontainer {
 		badge = m.styles.BadgeDev.Render("DEV")
 	}
 
-	nameWidth := max(12, rowWidth/4)
-	imageWidth := max(14, rowWidth/4)
-	statusWidth := max(12, rowWidth/5)
-
-	name := m.styles.Name.Render(truncate(container.DisplayName(), nameWidth))
-	shortID := m.styles.Muted.Render(container.ShortID)
-	image := m.styles.Muted.Render(truncate(container.Image, imageWidth))
 	status := container.Status
 	if status == "" {
 		status = container.State
 	}
-	status = m.styles.Status.Render(truncate(status, statusWidth))
 
 	selector := " "
 	if selected {
-		selector = "›"
+		selector = ">"
 	}
-	line1 := fmt.Sprintf("%s %s %s %s %s %s", selector, badge, name, shortID, image, status)
 
-	line2Prefix := "  ↳ "
-	line2Text := "regular Docker container"
-	line2Style := m.styles.Muted
-	if container.IsDevcontainer {
-		line2Style = m.styles.Path
-		line2Text = container.DevcontainerPath
-		if line2Text == "" {
-			line2Text = "devcontainer workspace path not reported"
-		}
-		if container.DevcontainerSource != "" {
-			line2Text += "  " + m.styles.Muted.Render("("+container.DevcontainerSource+")")
+	path := container.DevcontainerPath
+	pathText := ""
+	if path != "" {
+		pathText = " [" + path + "]"
+	}
+
+	prefixWidth := lipgloss.Width(selector) + 1 + lipgloss.Width(badge) + 1
+	if status != "" {
+		status = truncate(status, max(1, rowWidth-prefixWidth-2))
+	}
+	statusWidth := lipgloss.Width(status)
+	spaceBeforeStatus := 1
+	if statusWidth > 0 {
+		spaceBeforeStatus = 2
+	}
+	availableMainWidth := max(1, rowWidth-prefixWidth-statusWidth-spaceBeforeStatus)
+	nameText := container.DisplayName()
+	name := truncate(nameText, availableMainWidth)
+	if pathText != "" {
+		nameWidth := lipgloss.Width(nameText)
+		pathWidth := lipgloss.Width(pathText)
+		if nameWidth+pathWidth <= availableMainWidth {
+			name = nameText
+		} else {
+			reservedPathWidth := 0
+			if availableMainWidth > 8 {
+				reservedPathWidth = max(4, availableMainWidth/3)
+			}
+			name = truncate(nameText, max(1, availableMainWidth-reservedPathWidth))
+			pathText = truncate(pathText, max(0, availableMainWidth-lipgloss.Width(name)))
+			if pathText == "" {
+				name = truncate(nameText, availableMainWidth)
+			}
 		}
 	}
-	line2 := line2Prefix + line2Style.Render(truncate(line2Text, rowWidth-lipgloss.Width(line2Prefix)))
 
-	row := line1 + "\n" + line2
+	mainWidth := lipgloss.Width(name) + lipgloss.Width(pathText)
+	gapWidth := max(1, rowWidth-prefixWidth-mainWidth-statusWidth)
+	row := fmt.Sprintf(
+		"%s %s %s%s%s%s",
+		selector,
+		badge,
+		m.styles.Name.Render(name),
+		m.styles.Path.Render(pathText),
+		strings.Repeat(" ", gapWidth),
+		m.styles.Status.Render(status),
+	)
 	style := m.styles.Row.Width(rowWidth)
 	if selected {
 		style = m.styles.SelectedRow.Width(rowWidth)
@@ -482,17 +580,61 @@ func (m Model) renderRow(index int, container domain.Container, selected bool) s
 	return style.Render(row)
 }
 
-func (m Model) renderFooter() string {
+func (m Model) renderFooterPane() string {
 	position := ""
 	if len(m.visible) > 0 {
 		position = fmt.Sprintf("%d/%d", m.cursor+1, len(m.visible))
 	}
-	footer := m.styles.Subtle.Render(position)
+	footer := m.styles.PaneTitle.Render("Keybindings")
 	if position != "" {
-		footer += "  "
+		footer += " " + m.styles.Subtle.Render(position)
+	}
+	footer += "\n"
+	if position != "" {
+		footer += m.styles.Subtle.Render("global: ")
 	}
 	footer += m.styles.Help.Render(m.help.View(m.keys))
-	return footer
+	return m.styles.Pane.Width(paneInnerWidth(m.width)).Height(footerContentHeight(m.help.ShowAll)).Render(footer)
+}
+
+func (m Model) renderModal() string {
+	switch m.modal {
+	case modalSearch:
+		return m.renderSearchModal()
+	case modalFilter:
+		return m.renderFilterModal()
+	default:
+		return ""
+	}
+}
+
+func (m Model) renderSearchModal() string {
+	width := max(32, min(64, m.width-8))
+	m.searchInput.Width = max(10, width-8)
+	body := strings.Join([]string{
+		m.styles.PaneTitle.Render("[/] Search containers"),
+		m.searchInput.View(),
+		m.styles.Subtle.Render("enter applies  esc closes"),
+	}, "\n")
+	modal := m.styles.Modal.Width(width).Render(body)
+	return lipgloss.Place(m.width, max(m.height, lipgloss.Height(modal)), lipgloss.Center, lipgloss.Center, modal)
+}
+
+func (m Model) renderFilterModal() string {
+	width := max(28, min(44, m.width-8))
+	lines := []string{m.styles.PaneTitle.Render("[f] Filter containers")}
+	for index, mode := range filterModes() {
+		selector := " "
+		label := mode.String()
+		if index == m.filterCursor {
+			selector = ">"
+			label = m.styles.SelectedRow.Width(width - 4).Render(" " + label)
+		}
+		lines = append(lines, fmt.Sprintf("%s %s", selector, label))
+	}
+	lines = append(lines, m.styles.Subtle.Render("enter applies  esc closes"))
+	modal := m.styles.Modal.Width(width).Render(strings.Join(lines, "\n"))
+	return lipgloss.Place(m.width, max(m.height, lipgloss.Height(modal)), lipgloss.Center, lipgloss.Center, modal)
 }
 
 func (m Model) emptyMessage() string {
@@ -550,4 +692,36 @@ func wrap(value string, width int) string {
 	}
 	lines = append(lines, current)
 	return strings.Join(lines, "\n")
+}
+
+func filterModes() []containerfilter.Mode {
+	return []containerfilter.Mode{
+		containerfilter.ModeAll,
+		containerfilter.ModeDevcontainers,
+		containerfilter.ModeContainers,
+	}
+}
+
+func filterIndex(mode containerfilter.Mode) int {
+	for index, candidate := range filterModes() {
+		if candidate == mode {
+			return index
+		}
+	}
+	return 0
+}
+
+func paneInnerWidth(width int) int {
+	return max(20, width-4)
+}
+
+func paneContentWidth(width int) int {
+	return max(16, width-6)
+}
+
+func selectedPosition(cursor int, total int) int {
+	if total == 0 {
+		return 0
+	}
+	return cursor + 1
 }

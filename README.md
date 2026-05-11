@@ -53,11 +53,13 @@ make run
 | `↑` / `k` | Move up |
 | `↓` / `j` | Move down |
 | `pgup` / `b` | Page up |
-| `pgdn` / `f` | Page down |
+| `pgdn` | Page down |
 | `g` / `home` | Jump to top |
 | `G` / `end` | Jump to bottom |
-| `/` | Search |
-| `esc` | Leave search or clear an active search |
+| `/` | Open search modal |
+| `f` | Open filter modal |
+| `enter` | Confirm modal selection |
+| `esc` | Close modal or clear an active search |
 | `a` | Show all containers |
 | `d` | Show only devcontainers |
 | `o` | Show only ordinary Docker containers |
