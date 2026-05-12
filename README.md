@@ -1,6 +1,6 @@
 # lazydc
 
-lazydc is a terminal UI for viewing and controlling Docker containers with devcontainers highlighted first.
+lazydc is a terminal UI control panel for devcontainers.
 
 ## Features
 
