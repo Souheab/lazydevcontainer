@@ -181,10 +181,26 @@ func TestRenderMainPaneIncludesDetailsForSelectedContainer(t *testing.T) {
 
 	plain := stripANSI(m.renderMainPane())
 
-	for _, want := range []string{"Containers 1 of 1", "Details", "Container Type", "Devcontainer", "Project", "/home/me/api", "Image", "golang:1.24", "Volumes", "2 attached", "Ports", "3000 -> 3000"} {
+	for _, want := range []string{"Containers 1 of 1", "Details", "Container Type", "Devcontainer", "Project", "/home/me/api", "Image", "golang:1.24", "Volumes", "volume: workspace", "bind: /home/me/api", "Ports", "3000 -> 3000"} {
 		if !strings.Contains(plain, want) {
 			t.Fatalf("rendered split pane %q does not contain %q", plain, want)
 		}
+	}
+}
+
+func TestMountSummaryListsAttachedVolumes(t *testing.T) {
+	got := mountSummary([]domain.Mount{
+		{Type: "volume", Name: "workspace", Destination: "/workspaces/api"},
+		{Type: "bind", Source: "/home/me/api", Destination: "/src", ReadOnly: true},
+	})
+
+	for _, want := range []string{"volume: workspace -> /workspaces/api", "bind: /home/me/api -> /src (read-only)"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("mount summary %q does not contain %q", got, want)
+		}
+	}
+	if strings.Contains(got, "attached") {
+		t.Fatalf("mount summary should list mounts instead of a count: %q", got)
 	}
 }
 

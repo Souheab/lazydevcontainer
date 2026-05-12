@@ -721,10 +721,37 @@ func mountSummary(mounts []domain.Mount) string {
 	if len(mounts) == 0 {
 		return "None attached"
 	}
-	if len(mounts) == 1 {
-		return "1 attached"
+
+	values := make([]string, 0, len(mounts))
+	for _, mount := range mounts {
+		values = append(values, mountDescription(mount))
 	}
-	return fmt.Sprintf("%d attached", len(mounts))
+	return strings.Join(values, "\n")
+}
+
+func mountDescription(mount domain.Mount) string {
+	source := mount.Name
+	if source == "" {
+		source = mount.Source
+	}
+	if source == "" {
+		source = mount.Destination
+	}
+	if source == "" {
+		source = "Unknown"
+	}
+
+	value := source
+	if mount.Destination != "" && mount.Destination != source {
+		value = fmt.Sprintf("%s -> %s", value, mount.Destination)
+	}
+	if mount.Type != "" {
+		value = fmt.Sprintf("%s: %s", mount.Type, value)
+	}
+	if mount.ReadOnly {
+		value += " (read-only)"
+	}
+	return value
 }
 
 func portSummary(ports []domain.Port) string {
