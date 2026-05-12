@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/Souheab/lazydevcontainer/internal/domain"
 	containerfilter "github.com/Souheab/lazydevcontainer/internal/filter"
@@ -26,7 +27,7 @@ func (m Model) View() string {
 
 	view := m.styles.App.Width(max(0, m.width)).Height(max(0, m.height)).Render(strings.Join(sections, "\n"))
 	if m.modal != modalNone {
-		return m.renderModal()
+		return overlay(m.width, m.height, view, m.renderModal())
 	}
 	return view
 }
@@ -480,8 +481,7 @@ func (m Model) renderSearchModal() string {
 		input.View(),
 		m.styles.Subtle.Render("enter applies  esc closes"),
 	}, "\n")
-	modal := m.styles.Modal.Width(width).Render(body)
-	return lipgloss.Place(m.width, max(m.height, lipgloss.Height(modal)), lipgloss.Center, lipgloss.Center, modal)
+	return m.styles.Modal.Width(width).Render(body)
 }
 
 func (m Model) renderFilterModal() string {
@@ -497,8 +497,7 @@ func (m Model) renderFilterModal() string {
 		lines = append(lines, fmt.Sprintf("%s %s", selector, label))
 	}
 	lines = append(lines, m.styles.Subtle.Render("enter applies  esc closes"))
-	modal := m.styles.Modal.Width(width).Render(strings.Join(lines, "\n"))
-	return lipgloss.Place(m.width, max(m.height, lipgloss.Height(modal)), lipgloss.Center, lipgloss.Center, modal)
+	return m.styles.Modal.Width(width).Render(strings.Join(lines, "\n"))
 }
 
 func (m Model) renderConfirmActionModal() string {
@@ -509,8 +508,7 @@ func (m Model) renderConfirmActionModal() string {
 		fmt.Sprintf("%s %s?", actionPrompt(action.kind), action.containerName),
 		m.styles.Subtle.Render("enter confirms  esc cancels"),
 	}, "\n")
-	modal := m.styles.Modal.Width(width).Render(body)
-	return lipgloss.Place(m.width, max(m.height, lipgloss.Height(modal)), lipgloss.Center, lipgloss.Center, modal)
+	return m.styles.Modal.Width(width).Render(body)
 }
 
 func (m Model) renderConfirmTemplateWriteModal() string {
@@ -527,8 +525,7 @@ func (m Model) renderConfirmTemplateWriteModal() string {
 		wrap(detail, max(24, width-4)),
 		m.styles.Subtle.Render("enter confirms  esc cancels"),
 	}, "\n")
-	modal := m.styles.Modal.Width(width).Render(body)
-	return lipgloss.Place(m.width, max(m.height, lipgloss.Height(modal)), lipgloss.Center, lipgloss.Center, modal)
+	return m.styles.Modal.Width(width).Render(body)
 }
 
 func (m Model) renderConfigInputModal() string {
@@ -549,8 +546,7 @@ func (m Model) renderConfigInputModal() string {
 		input.View(),
 		m.styles.Subtle.Render("enter applies  esc cancels"),
 	}, "\n")
-	modal := m.styles.Modal.Width(width).Render(body)
-	return lipgloss.Place(m.width, max(m.height, lipgloss.Height(modal)), lipgloss.Center, lipgloss.Center, modal)
+	return m.styles.Modal.Width(width).Render(body)
 }
 
 func (m Model) renderConfigFeatureModal() string {
@@ -601,8 +597,7 @@ func (m Model) renderConfigFeatureModal() string {
 	}
 	lines = append(lines, m.styles.Subtle.Render("enter edits configured or adds selection/typed ID  del removes configured  esc closes"))
 	body := strings.Join(lines, "\n")
-	modal := m.styles.Modal.Width(width).Height(height).Render(body)
-	return lipgloss.Place(m.width, max(m.height, lipgloss.Height(modal)), lipgloss.Center, lipgloss.Center, modal)
+	return m.styles.Modal.Width(width).Height(height).Render(body)
 }
 
 func (m Model) renderConfigCandidateModal() string {
@@ -622,8 +617,7 @@ func (m Model) renderConfigCandidateModal() string {
 		lines = append(lines, fmt.Sprintf("%s %s", selector, label))
 	}
 	lines = append(lines, m.styles.Subtle.Render("enter opens  esc keeps first by spec precedence"))
-	modal := m.styles.Modal.Width(width).Render(strings.Join(lines, "\n"))
-	return lipgloss.Place(m.width, max(m.height, lipgloss.Height(modal)), lipgloss.Center, lipgloss.Center, modal)
+	return m.styles.Modal.Width(width).Render(strings.Join(lines, "\n"))
 }
 
 func (m Model) renderConfirmConfigSaveModal() string {
@@ -633,8 +627,7 @@ func (m Model) renderConfirmConfigSaveModal() string {
 		wrap(fmt.Sprintf("Write changes to %s?", m.configDoc.Path), max(24, width-4)),
 		m.styles.Subtle.Render("enter confirms  esc cancels"),
 	}, "\n")
-	modal := m.styles.Modal.Width(width).Render(body)
-	return lipgloss.Place(m.width, max(m.height, lipgloss.Height(modal)), lipgloss.Center, lipgloss.Center, modal)
+	return m.styles.Modal.Width(width).Render(body)
 }
 
 func (m Model) renderConfirmConfigDiscardModal() string {
@@ -644,8 +637,57 @@ func (m Model) renderConfirmConfigDiscardModal() string {
 		"Discard unsaved devcontainer config changes?",
 		m.styles.Subtle.Render("enter discards  esc returns"),
 	}, "\n")
-	modal := m.styles.Modal.Width(width).Render(body)
-	return lipgloss.Place(m.width, max(m.height, lipgloss.Height(modal)), lipgloss.Center, lipgloss.Center, modal)
+	return m.styles.Modal.Width(width).Render(body)
+}
+
+func overlay(width, height int, base, layer string) string {
+	if width <= 0 || height <= 0 || layer == "" {
+		return base
+	}
+
+	baseLines := strings.Split(base, "\n")
+	layerLines := strings.Split(layer, "\n")
+	layerWidth := lipgloss.Width(layer)
+	layerHeight := lipgloss.Height(layer)
+	left := max(0, (width-layerWidth)/2)
+	top := max(0, (height-layerHeight)/2)
+
+	lines := make([]string, height)
+	for index := range lines {
+		if index < len(baseLines) {
+			lines[index] = fitLine(baseLines[index], width)
+		} else {
+			lines[index] = strings.Repeat(" ", width)
+		}
+	}
+
+	for index, layerLine := range layerLines {
+		target := top + index
+		if target < 0 || target >= height {
+			continue
+		}
+		availableWidth := max(0, width-left)
+		visibleLayer := fitLine(layerLine, min(layerWidth, availableWidth))
+		visibleWidth := ansi.StringWidth(visibleLayer)
+		baseLine := lines[target]
+		prefix := ansi.Cut(baseLine, 0, left)
+		suffix := ansi.Cut(baseLine, left+visibleWidth, width)
+		lines[target] = prefix + visibleLayer + suffix
+	}
+
+	return strings.Join(lines, "\n")
+}
+
+func fitLine(line string, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	line = ansi.Truncate(line, width, "")
+	padding := width - ansi.StringWidth(line)
+	if padding > 0 {
+		line += strings.Repeat(" ", padding)
+	}
+	return line
 }
 
 func (m Model) emptyMessage() string {

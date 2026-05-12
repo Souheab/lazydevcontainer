@@ -557,6 +557,23 @@ func TestViewFitsConfiguredSize(t *testing.T) {
 	}
 }
 
+func TestViewOverlaysModalOnExistingPanes(t *testing.T) {
+	m := testModel([]domain.Container{{ID: "1", ShortID: "111", Name: "api"}})
+	m.modal = modalSearch
+
+	view := stripANSI(m.View())
+
+	if !strings.Contains(view, "[/] Search containers") {
+		t.Fatalf("view should include search modal: %q", view)
+	}
+	if !strings.Contains(view, "Status") {
+		t.Fatalf("view should keep status pane behind modal: %q", view)
+	}
+	if !strings.Contains(view, "Keybindings") {
+		t.Fatalf("view should keep footer pane behind modal: %q", view)
+	}
+}
+
 func TestStartStopOpensStopConfirmationForRunningContainer(t *testing.T) {
 	m := testModel([]domain.Container{{ID: "1", ShortID: "111", Name: "api", State: "running"}})
 
