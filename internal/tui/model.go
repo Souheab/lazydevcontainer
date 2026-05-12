@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"os/exec"
 	"strings"
 	"time"
 
@@ -25,14 +27,27 @@ const (
 	rowHeight           = 3
 )
 
-// ContainerProvider is the read-only data source required by the TUI.
-type ContainerProvider interface {
+// ContainerService is the Docker-backed service required by the TUI.
+type ContainerService interface {
 	ListContainers(context.Context) ([]domain.Container, error)
+	StartContainer(context.Context, string) error
+	StopContainer(context.Context, string) error
+	RestartContainer(context.Context, string) error
 }
 
 type containersLoadedMsg struct {
 	containers []domain.Container
 	err        error
+}
+
+type containerActionCompletedMsg struct {
+	action pendingAction
+	err    error
+}
+
+type externalCommandFinishedMsg struct {
+	kind string
+	err  error
 }
 
 type modalMode int
@@ -41,11 +56,27 @@ const (
 	modalNone modalMode = iota
 	modalSearch
 	modalFilter
+	modalConfirmAction
 )
+
+type actionKind int
+
+const (
+	actionNone actionKind = iota
+	actionStart
+	actionStop
+	actionRestart
+)
+
+type pendingAction struct {
+	kind          actionKind
+	containerID   string
+	containerName string
+}
 
 // Model is the Bubble Tea application state.
 type Model struct {
-	provider ContainerProvider
+	provider ContainerService
 
 	containers []domain.Container
 	visible    []domain.Container
@@ -59,19 +90,23 @@ type Model struct {
 	query      string
 	modal      modalMode
 
-	filterCursor int
+	filterCursor  int
+	pendingAction pendingAction
 
 	cursor int
 	offset int
 	width  int
 	height int
 
-	loading bool
-	err     error
+	loading          bool
+	actionInProgress bool
+	err              error
+	actionStatus     string
+	actionErr        error
 }
 
 // New returns a TUI model wired to a container provider.
-func New(provider ContainerProvider) Model {
+func New(provider ContainerService) Model {
 	styles := newStyles()
 	searchInput := textinput.New()
 	searchInput.Prompt = "/ "
@@ -121,12 +156,41 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.ensureCursorVisible()
 		return m, nil
 
+	case containerActionCompletedMsg:
+		m.actionInProgress = false
+		m.actionErr = friendlyDockerError(msg.err)
+		if m.actionErr != nil {
+			m.actionStatus = fmt.Sprintf("%s failed for %s", actionVerb(msg.action.kind), msg.action.containerName)
+			return m, nil
+		}
+		m.actionStatus = fmt.Sprintf("%s %s", actionPastTense(msg.action.kind), msg.action.containerName)
+		m.loading = true
+		m.err = nil
+		return m, loadContainers(m.provider)
+
+	case externalCommandFinishedMsg:
+		m.actionErr = msg.err
+		if msg.err != nil {
+			m.actionStatus = fmt.Sprintf("%s failed", msg.kind)
+			return m, nil
+		}
+		m.actionStatus = fmt.Sprintf("%s finished", msg.kind)
+		if msg.kind == "shell" {
+			m.loading = true
+			m.err = nil
+			return m, loadContainers(m.provider)
+		}
+		return m, nil
+
 	case tea.KeyMsg:
 		if m.modal == modalSearch {
 			return m.updateSearch(msg)
 		}
 		if m.modal == modalFilter {
 			return m.updateFilterModal(msg)
+		}
+		if m.modal == modalConfirmAction {
+			return m.updateConfirmAction(msg)
 		}
 		return m.updateKey(msg)
 
@@ -189,7 +253,19 @@ func (m Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, m.keys.Refresh):
 		m.loading = true
 		m.err = nil
+		m.actionErr = nil
+		m.actionStatus = "Refreshing containers"
 		return m, loadContainers(m.provider)
+	case key.Matches(msg, m.keys.StartStop):
+		m.openStartStopConfirmation()
+		return m, nil
+	case key.Matches(msg, m.keys.Restart):
+		m.openRestartConfirmation()
+		return m, nil
+	case key.Matches(msg, m.keys.Shell):
+		return m.openShell()
+	case key.Matches(msg, m.keys.Editor):
+		return m.openEditor()
 	case key.Matches(msg, m.keys.Search):
 		m.modal = modalSearch
 		m.searchInput.Focus()
@@ -243,6 +319,29 @@ func (m Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.ensureCursorBounds()
 		m.ensureCursorVisible()
 		return m, nil
+	}
+
+	return m, nil
+}
+
+func (m Model) updateConfirmAction(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch {
+	case key.Matches(msg, m.keys.Quit):
+		return m, tea.Quit
+	case key.Matches(msg, m.keys.Cancel):
+		m.modal = modalNone
+		m.pendingAction = pendingAction{}
+		m.actionStatus = "Action cancelled"
+		m.actionErr = nil
+		return m, nil
+	case key.Matches(msg, m.keys.Confirm):
+		action := m.pendingAction
+		m.modal = modalNone
+		m.pendingAction = pendingAction{}
+		m.actionInProgress = true
+		m.actionStatus = fmt.Sprintf("%s %s", actionVerb(action.kind), action.containerName)
+		m.actionErr = nil
+		return m, runContainerAction(m.provider, action)
 	}
 
 	return m, nil
@@ -305,7 +404,7 @@ func (m Model) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func loadContainers(provider ContainerProvider) tea.Cmd {
+func loadContainers(provider ContainerService) tea.Cmd {
 	return func() tea.Msg {
 		if provider == nil {
 			return containersLoadedMsg{err: errors.New("no container provider configured")}
@@ -316,6 +415,30 @@ func loadContainers(provider ContainerProvider) tea.Cmd {
 
 		containers, err := provider.ListContainers(ctx)
 		return containersLoadedMsg{containers: containers, err: friendlyDockerError(err)}
+	}
+}
+
+func runContainerAction(provider ContainerService, action pendingAction) tea.Cmd {
+	return func() tea.Msg {
+		if provider == nil {
+			return containerActionCompletedMsg{action: action, err: errors.New("no container provider configured")}
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), loadTimeout)
+		defer cancel()
+
+		var err error
+		switch action.kind {
+		case actionStart:
+			err = provider.StartContainer(ctx, action.containerID)
+		case actionStop:
+			err = provider.StopContainer(ctx, action.containerID)
+		case actionRestart:
+			err = provider.RestartContainer(ctx, action.containerID)
+		default:
+			err = errors.New("no container action selected")
+		}
+		return containerActionCompletedMsg{action: action, err: err}
 	}
 }
 
@@ -341,6 +464,150 @@ func (m *Model) setFilter(mode containerfilter.Mode) {
 	m.applyFilters()
 	m.ensureCursorBounds()
 	m.ensureCursorVisible()
+}
+
+func (m *Model) openStartStopConfirmation() {
+	container, ok := m.selectedContainer()
+	if !ok {
+		m.setActionError("No container selected")
+		return
+	}
+
+	kind := actionStart
+	if containerIsRunning(container) {
+		kind = actionStop
+	}
+	m.pendingAction = pendingAction{
+		kind:          kind,
+		containerID:   container.ID,
+		containerName: container.DisplayName(),
+	}
+	m.modal = modalConfirmAction
+	m.actionErr = nil
+}
+
+func (m *Model) openRestartConfirmation() {
+	container, ok := m.selectedContainer()
+	if !ok {
+		m.setActionError("No container selected")
+		return
+	}
+
+	m.pendingAction = pendingAction{
+		kind:          actionRestart,
+		containerID:   container.ID,
+		containerName: container.DisplayName(),
+	}
+	m.modal = modalConfirmAction
+	m.actionErr = nil
+}
+
+func (m Model) openShell() (tea.Model, tea.Cmd) {
+	container, ok := m.selectedContainer()
+	if !ok {
+		m.setActionError("No container selected")
+		return m, nil
+	}
+	if container.ID == "" {
+		m.setActionError("Selected container has no ID")
+		return m, nil
+	}
+
+	m.actionStatus = fmt.Sprintf("Opening shell in %s", container.DisplayName())
+	m.actionErr = nil
+	cmd := exec.Command("docker", "exec", "-it", container.ID, "sh", "-lc", "if command -v bash >/dev/null 2>&1; then exec bash; else exec sh; fi")
+	return m, tea.ExecProcess(cmd, func(err error) tea.Msg {
+		return externalCommandFinishedMsg{kind: "shell", err: err}
+	})
+}
+
+func (m Model) openEditor() (tea.Model, tea.Cmd) {
+	container, ok := m.selectedContainer()
+	if !ok {
+		m.setActionError("No container selected")
+		return m, nil
+	}
+	if strings.TrimSpace(container.DevcontainerPath) == "" {
+		m.setActionError("Selected container has no detected workspace path")
+		return m, nil
+	}
+
+	editor := strings.TrimSpace(os.Getenv("EDITOR"))
+	if editor == "" {
+		m.setActionError("EDITOR is not set")
+		return m, nil
+	}
+
+	m.actionStatus = fmt.Sprintf("Opening %s in editor", container.DisplayName())
+	m.actionErr = nil
+	cmd := editorCommand(editor, container.DevcontainerPath)
+	return m, tea.ExecProcess(cmd, func(err error) tea.Msg {
+		return externalCommandFinishedMsg{kind: "editor", err: err}
+	})
+}
+
+func editorCommand(editor string, path string) *exec.Cmd {
+	parts := strings.Fields(editor)
+	if len(parts) == 0 {
+		return exec.Command(editor, path)
+	}
+	args := append(parts[1:], path)
+	return exec.Command(parts[0], args...)
+}
+
+func (m *Model) setActionError(message string) {
+	m.actionStatus = message
+	m.actionErr = errors.New(message)
+}
+
+func (m Model) selectedContainer() (domain.Container, bool) {
+	if m.cursor < 0 || m.cursor >= len(m.visible) {
+		return domain.Container{}, false
+	}
+	return m.visible[m.cursor], true
+}
+
+func containerIsRunning(container domain.Container) bool {
+	return strings.EqualFold(container.State, "running") || strings.HasPrefix(strings.ToLower(container.Status), "up ")
+}
+
+func actionVerb(kind actionKind) string {
+	switch kind {
+	case actionStart:
+		return "Starting"
+	case actionStop:
+		return "Stopping"
+	case actionRestart:
+		return "Restarting"
+	default:
+		return "Running action for"
+	}
+}
+
+func actionPastTense(kind actionKind) string {
+	switch kind {
+	case actionStart:
+		return "Started"
+	case actionStop:
+		return "Stopped"
+	case actionRestart:
+		return "Restarted"
+	default:
+		return "Updated"
+	}
+}
+
+func actionPrompt(kind actionKind) string {
+	switch kind {
+	case actionStart:
+		return "Start"
+	case actionStop:
+		return "Stop"
+	case actionRestart:
+		return "Restart"
+	default:
+		return "Run action for"
+	}
 }
 
 func (m *Model) applyFilters() {
@@ -460,6 +727,15 @@ func (m Model) renderHeaderPane() string {
 	}
 	if m.err != nil {
 		status += "  refresh failed"
+	}
+	if m.actionInProgress {
+		status += "  action running..."
+	}
+	if m.actionStatus != "" {
+		status += "  " + m.actionStatus
+	}
+	if m.actionErr != nil {
+		status += ": " + m.actionErr.Error()
 	}
 
 	body := m.styles.Header.Render(truncate(status, paneContentWidth(m.width)))
@@ -612,6 +888,8 @@ func (m Model) renderModal() string {
 		return m.renderSearchModal()
 	case modalFilter:
 		return m.renderFilterModal()
+	case modalConfirmAction:
+		return m.renderConfirmActionModal()
 	default:
 		return ""
 	}
@@ -643,6 +921,18 @@ func (m Model) renderFilterModal() string {
 	}
 	lines = append(lines, m.styles.Subtle.Render("enter applies  esc closes"))
 	modal := m.styles.Modal.Width(width).Render(strings.Join(lines, "\n"))
+	return lipgloss.Place(m.width, max(m.height, lipgloss.Height(modal)), lipgloss.Center, lipgloss.Center, modal)
+}
+
+func (m Model) renderConfirmActionModal() string {
+	width := max(34, min(64, m.width-8))
+	action := m.pendingAction
+	body := strings.Join([]string{
+		m.styles.PaneTitle.Render("[enter] Confirm action"),
+		fmt.Sprintf("%s %s?", actionPrompt(action.kind), action.containerName),
+		m.styles.Subtle.Render("enter confirms  esc cancels"),
+	}, "\n")
+	modal := m.styles.Modal.Width(width).Render(body)
 	return lipgloss.Place(m.width, max(m.height, lipgloss.Height(modal)), lipgloss.Center, lipgloss.Center, modal)
 }
 

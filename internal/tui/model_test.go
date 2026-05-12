@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"regexp"
 	"strings"
@@ -260,12 +262,176 @@ func TestViewFitsConfiguredSize(t *testing.T) {
 	}
 }
 
+func TestStartStopOpensStopConfirmationForRunningContainer(t *testing.T) {
+	m := testModel([]domain.Container{{ID: "1", ShortID: "111", Name: "api", State: "running"}})
+
+	m = updateModel(t, m, runeKey('s'))
+
+	if m.modal != modalConfirmAction {
+		t.Fatalf("expected confirm modal, got %v", m.modal)
+	}
+	if m.pendingAction.kind != actionStop || m.pendingAction.containerID != "1" {
+		t.Fatalf("unexpected pending action: %+v", m.pendingAction)
+	}
+	if !strings.Contains(stripANSI(m.renderConfirmActionModal()), "Stop api?") {
+		t.Fatalf("confirm modal does not describe stop action: %q", stripANSI(m.renderConfirmActionModal()))
+	}
+}
+
+func TestStartStopOpensStartConfirmationForStoppedContainer(t *testing.T) {
+	m := testModel([]domain.Container{{ID: "1", ShortID: "111", Name: "api", State: "exited"}})
+
+	m = updateModel(t, m, runeKey('s'))
+
+	if m.modal != modalConfirmAction {
+		t.Fatalf("expected confirm modal, got %v", m.modal)
+	}
+	if m.pendingAction.kind != actionStart || m.pendingAction.containerID != "1" {
+		t.Fatalf("unexpected pending action: %+v", m.pendingAction)
+	}
+}
+
+func TestRestartOpensConfirmation(t *testing.T) {
+	m := testModel([]domain.Container{{ID: "1", ShortID: "111", Name: "api", State: "running"}})
+
+	m = updateModel(t, m, runeKey('R'))
+
+	if m.modal != modalConfirmAction {
+		t.Fatalf("expected confirm modal, got %v", m.modal)
+	}
+	if m.pendingAction.kind != actionRestart || m.pendingAction.containerName != "api" {
+		t.Fatalf("unexpected pending action: %+v", m.pendingAction)
+	}
+}
+
+func TestConfirmActionDispatchesCommand(t *testing.T) {
+	service := &fakeContainerService{
+		containers: []domain.Container{{ID: "1", ShortID: "111", Name: "api", State: "running"}},
+	}
+	m := testModelWithProvider(service)
+	m = updateModel(t, m, runeKey('s'))
+
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m, ok := next.(Model)
+	if !ok {
+		t.Fatalf("expected tui.Model, got %T", next)
+	}
+	if cmd == nil {
+		t.Fatal("expected action command")
+	}
+	if m.modal != modalNone || !m.actionInProgress {
+		t.Fatalf("expected action to be in progress after confirm: %+v", m)
+	}
+
+	msg := cmd()
+	completed, ok := msg.(containerActionCompletedMsg)
+	if !ok {
+		t.Fatalf("expected containerActionCompletedMsg, got %T", msg)
+	}
+	if completed.err != nil {
+		t.Fatalf("unexpected action error: %v", completed.err)
+	}
+	if service.stopped != "1" {
+		t.Fatalf("expected stop to be called for 1, got %q", service.stopped)
+	}
+}
+
+func TestCancelActionDoesNotDispatchCommand(t *testing.T) {
+	m := testModel([]domain.Container{{ID: "1", ShortID: "111", Name: "api", State: "running"}})
+	m = updateModel(t, m, runeKey('s'))
+
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m, ok := next.(Model)
+	if !ok {
+		t.Fatalf("expected tui.Model, got %T", next)
+	}
+	if cmd != nil {
+		t.Fatal("expected no command when cancelling action")
+	}
+	if m.modal != modalNone || m.pendingAction.kind != actionNone {
+		t.Fatalf("expected action to be cleared, got modal=%v action=%+v", m.modal, m.pendingAction)
+	}
+}
+
+func TestSuccessfulActionSetsStatusAndRefreshes(t *testing.T) {
+	service := &fakeContainerService{
+		containers: []domain.Container{{ID: "1", ShortID: "111", Name: "api", State: "exited"}},
+	}
+	m := testModelWithProvider(service)
+	action := pendingAction{kind: actionStart, containerID: "1", containerName: "api"}
+	m.actionInProgress = true
+
+	next, cmd := m.Update(containerActionCompletedMsg{action: action})
+	m, ok := next.(Model)
+	if !ok {
+		t.Fatalf("expected tui.Model, got %T", next)
+	}
+	if m.actionInProgress || m.actionErr != nil || m.actionStatus != "Started api" {
+		t.Fatalf("unexpected action state after success: status=%q err=%v running=%v", m.actionStatus, m.actionErr, m.actionInProgress)
+	}
+	if cmd == nil {
+		t.Fatal("expected refresh command after successful action")
+	}
+}
+
+func TestFailedActionRendersErrorStatus(t *testing.T) {
+	m := testModel([]domain.Container{{ID: "1", ShortID: "111", Name: "api", State: "running"}})
+	action := pendingAction{kind: actionStop, containerID: "1", containerName: "api"}
+	m.actionInProgress = true
+
+	next, cmd := m.Update(containerActionCompletedMsg{action: action, err: errors.New("boom")})
+	m, ok := next.(Model)
+	if !ok {
+		t.Fatalf("expected tui.Model, got %T", next)
+	}
+	if cmd != nil {
+		t.Fatal("expected no refresh command after failed action")
+	}
+	header := stripANSI(m.renderHeaderPane())
+	if !strings.Contains(header, "Stopping failed for api") || !strings.Contains(header, "boom") {
+		t.Fatalf("header missing action error: %q", header)
+	}
+}
+
+func TestShellAndEditorErrorsWithoutUsableSelection(t *testing.T) {
+	m := testModel(nil)
+	m = updateModel(t, m, runeKey('x'))
+	if m.actionErr == nil || !strings.Contains(m.actionStatus, "No container selected") {
+		t.Fatalf("expected shell selection error, got status=%q err=%v", m.actionStatus, m.actionErr)
+	}
+
+	m = testModel([]domain.Container{{ID: "1", ShortID: "111", Name: "api", State: "running"}})
+	m = updateModel(t, m, runeKey('e'))
+	if m.actionErr == nil || !strings.Contains(m.actionStatus, "no detected workspace path") {
+		t.Fatalf("expected editor path error, got status=%q err=%v", m.actionStatus, m.actionErr)
+	}
+
+	t.Setenv("EDITOR", "")
+	m = testModel([]domain.Container{{ID: "1", ShortID: "111", Name: "api", State: "running", DevcontainerPath: "/workspaces/api"}})
+	m = updateModel(t, m, runeKey('e'))
+	if m.actionErr == nil || !strings.Contains(m.actionStatus, "EDITOR is not set") {
+		t.Fatalf("expected editor environment error, got status=%q err=%v", m.actionStatus, m.actionErr)
+	}
+}
+
 func testModel(containers []domain.Container) Model {
 	m := New(nil)
 	m.width = 100
 	m.height = 30
 	m.loading = false
 	m.containers = containers
+	m.applyFilters()
+	m.ensureCursorBounds()
+	m.ensureCursorVisible()
+	return m
+}
+
+func testModelWithProvider(provider *fakeContainerService) Model {
+	m := New(provider)
+	m.width = 100
+	m.height = 30
+	m.loading = false
+	m.containers = provider.containers
 	m.applyFilters()
 	m.ensureCursorBounds()
 	m.ensureCursorVisible()
@@ -288,4 +454,31 @@ func runeKey(r rune) tea.KeyMsg {
 
 func stripANSI(value string) string {
 	return ansiPattern.ReplaceAllString(value, "")
+}
+
+type fakeContainerService struct {
+	containers []domain.Container
+	started    string
+	stopped    string
+	restarted  string
+	err        error
+}
+
+func (f *fakeContainerService) ListContainers(context.Context) ([]domain.Container, error) {
+	return f.containers, f.err
+}
+
+func (f *fakeContainerService) StartContainer(_ context.Context, id string) error {
+	f.started = id
+	return f.err
+}
+
+func (f *fakeContainerService) StopContainer(_ context.Context, id string) error {
+	f.stopped = id
+	return f.err
+}
+
+func (f *fakeContainerService) RestartContainer(_ context.Context, id string) error {
+	f.restarted = id
+	return f.err
 }

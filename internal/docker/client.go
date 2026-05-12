@@ -50,6 +50,42 @@ func (c *Client) ListContainers(ctx context.Context) ([]domain.Container, error)
 	return containers, nil
 }
 
+// StartContainer starts a stopped container by ID or name.
+func (c *Client) StartContainer(ctx context.Context, id string) error {
+	if c == nil || c.api == nil {
+		return fmt.Errorf("Docker client is not initialized")
+	}
+
+	if _, err := c.api.ContainerStart(ctx, id, client.ContainerStartOptions{}); err != nil {
+		return fmt.Errorf("start Docker container: %w", err)
+	}
+	return nil
+}
+
+// StopContainer stops a running container by ID or name.
+func (c *Client) StopContainer(ctx context.Context, id string) error {
+	if c == nil || c.api == nil {
+		return fmt.Errorf("Docker client is not initialized")
+	}
+
+	if _, err := c.api.ContainerStop(ctx, id, client.ContainerStopOptions{}); err != nil {
+		return fmt.Errorf("stop Docker container: %w", err)
+	}
+	return nil
+}
+
+// RestartContainer restarts a container by ID or name.
+func (c *Client) RestartContainer(ctx context.Context, id string) error {
+	if c == nil || c.api == nil {
+		return fmt.Errorf("Docker client is not initialized")
+	}
+
+	if _, err := c.api.ContainerRestart(ctx, id, client.ContainerRestartOptions{}); err != nil {
+		return fmt.Errorf("restart Docker container: %w", err)
+	}
+	return nil
+}
+
 func fromSummary(summary container.Summary) domain.Container {
 	labels := cloneLabels(summary.Labels)
 	mounts := convertMounts(summary.Mounts)

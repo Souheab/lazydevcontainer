@@ -1,7 +1,9 @@
 package docker
 
 import (
+	"context"
 	"net/netip"
+	"strings"
 	"testing"
 	"time"
 
@@ -126,5 +128,24 @@ func TestSortDefaultKeepsOrdinaryContainersAfterDevcontainers(t *testing.T) {
 	}
 	if containers[1].Name != "aaa-db" || containers[1].IsDevcontainer {
 		t.Fatalf("second container = %+v, want ordinary aaa-db", containers[1])
+	}
+}
+
+func TestLifecycleMethodsRequireInitializedDockerClient(t *testing.T) {
+	ctx := context.Background()
+	client := &Client{}
+
+	for name, run := range map[string]func() error{
+		"start":   func() error { return client.StartContainer(ctx, "abc") },
+		"stop":    func() error { return client.StopContainer(ctx, "abc") },
+		"restart": func() error { return client.RestartContainer(ctx, "abc") },
+	} {
+		err := run()
+		if err == nil {
+			t.Fatalf("%s returned nil error for uninitialized client", name)
+		}
+		if !strings.Contains(err.Error(), "Docker client is not initialized") {
+			t.Fatalf("%s error = %q, want initialized message", name, err)
+		}
 	}
 }

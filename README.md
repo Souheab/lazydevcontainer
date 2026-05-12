@@ -1,8 +1,6 @@
 # lazydc
 
-lazydc is a read-only terminal UI for viewing Docker containers with devcontainers highlighted first.
-
-The v0 goal is intentionally small: list the containers visible to the configured Docker daemon, identify likely Dev Containers, show their workspace or mount path, and provide comfortable navigation, filtering, and search.
+lazydc is a terminal UI for viewing and controlling Docker containers with devcontainers highlighted first.
 
 ## Features
 
@@ -12,6 +10,9 @@ The v0 goal is intentionally small: list the containers visible to the configure
 - Shows the best-known devcontainer workspace/mount path when available.
 - Filters between all containers, devcontainers only, and ordinary containers only.
 - Searches across container name, image, status, ID, labels, and mount paths.
+- Starts, stops, and restarts selected containers after confirmation.
+- Opens an interactive shell in the selected container.
+- Opens a detected devcontainer workspace path in `$EDITOR`.
 - Supports keyboard, Vim-style movement, and mouse input.
 - Refreshes without leaving the TUI.
 
@@ -66,6 +67,10 @@ make run
 | `tab` / `l` / `→` | Next filter |
 | `shift+tab` / `h` / `←` | Previous filter |
 | `r` | Refresh containers |
+| `s` | Start stopped selected container or stop running selected container |
+| `R` | Restart selected container |
+| `x` | Open an interactive shell in the selected container |
+| `e` | Open the selected devcontainer workspace path in `$EDITOR` |
 | `?` | Toggle full help |
 | `q` / `ctrl+c` | Quit |
 
@@ -89,7 +94,3 @@ make test
 make vet
 make build
 ```
-
-## Scope
-
-v0 is view-only. It does not start, stop, exec into, attach to, or remove containers.
