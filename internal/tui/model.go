@@ -122,11 +122,26 @@ type configRowKind int
 
 const (
 	configRowField configRowKind = iota
-	configRowAddFeature
+	configRowFeatures
 	configRowFeature
 	configRowAddExtension
 	configRowExtension
 )
+
+type configFeatureModalItemKind int
+
+const (
+	configFeatureModalConfigured configFeatureModalItemKind = iota
+	configFeatureModalManual
+	configFeatureModalCatalog
+)
+
+type configFeatureModalItem struct {
+	kind    configFeatureModalItemKind
+	id      string
+	name    string
+	options map[string]any
+}
 
 type configRow struct {
 	kind  configRowKind
@@ -171,6 +186,7 @@ type Model struct {
 	configEdit               configEditKind
 	configEditFeatureID      string
 	configEditExtensionIndex int
+	configInputReturnFeature bool
 	configCandidateCursor    int
 
 	cursor         int

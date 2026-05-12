@@ -555,26 +555,41 @@ func (m Model) renderConfigInputModal() string {
 
 func (m Model) renderConfigFeatureModal() string {
 	width := max(56, min(94, m.width-8))
-	height := max(8, min(18, m.height-8))
+	height := max(10, min(22, m.height-8))
 	input := m.featureSearchInput
 	input.Width = max(10, width-8)
 	lines := []string{
-		m.styles.PaneTitle.Render("[/] Add feature"),
+		m.styles.PaneTitle.Render("[/] Features"),
 		input.View(),
 	}
-	if m.featureCatalogLoading {
-		lines = append(lines, m.styles.Empty.Render("Loading feature catalog..."))
-	} else if len(m.visibleFeatures) == 0 {
-		lines = append(lines, m.styles.Empty.Render("No catalog match. Press enter to add typed feature ID."))
+
+	items := m.featureModalItems()
+	if len(items) == 0 {
+		if m.featureCatalogLoading {
+			lines = append(lines, m.styles.Empty.Render("Loading feature catalog..."))
+		} else {
+			lines = append(lines, m.styles.Empty.Render("No catalog match. Press enter to add typed feature ID."))
+		}
 	} else {
 		rowCount := max(1, height-5)
-		end := min(len(m.visibleFeatures), m.featureOffset+rowCount)
+		end := min(len(items), m.featureOffset+rowCount)
 		for index := m.featureOffset; index < end; index++ {
-			feature := m.visibleFeatures[index]
+			item := items[index]
 			selector := " "
-			text := feature.ID
-			if feature.Name != "" {
-				text = feature.Name + "  " + feature.ID
+			text := item.id
+			switch item.kind {
+			case configFeatureModalConfigured:
+				text = "Configured  " + item.id
+				options := featureOptionsString(item.options)
+				if options != "" {
+					text += "  " + options
+				}
+			case configFeatureModalManual:
+				text = "Add typed ID  " + item.id
+			case configFeatureModalCatalog:
+				if item.name != "" {
+					text = item.name + "  " + item.id
+				}
 			}
 			text = truncate(text, width-6)
 			if index == m.featureCursor {
@@ -584,7 +599,7 @@ func (m Model) renderConfigFeatureModal() string {
 			lines = append(lines, fmt.Sprintf("%s %s", selector, text))
 		}
 	}
-	lines = append(lines, m.styles.Subtle.Render("enter adds selection or typed ID  esc cancels"))
+	lines = append(lines, m.styles.Subtle.Render("enter edits configured or adds selection/typed ID  del removes configured  esc closes"))
 	body := strings.Join(lines, "\n")
 	modal := m.styles.Modal.Width(width).Height(height).Render(body)
 	return lipgloss.Place(m.width, max(m.height, lipgloss.Height(modal)), lipgloss.Center, lipgloss.Center, modal)

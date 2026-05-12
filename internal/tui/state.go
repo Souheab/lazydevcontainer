@@ -180,14 +180,13 @@ func (m *Model) openConfigEditor() {
 	}
 
 	switch row.kind {
-	case configRowAddFeature:
+	case configRowFeatures:
 		m.openFeaturePicker()
 	case configRowAddExtension:
 		m.configEditExtensionIndex = -1
 		m.openConfigInput(configEditAddExtension, "", "publisher.extension")
 	case configRowFeature:
-		m.configEditFeatureID = row.id
-		m.openConfigInput(configEditFeatureOptions, featureOptionsString(m.configDoc.Features[row.id]), "version=latest, option=true")
+		m.openFeatureOptionsInput(row.id, false)
 	case configRowExtension:
 		m.configEditExtensionIndex = row.index
 		m.openConfigInput(configEditAddExtension, row.value, "publisher.extension")
@@ -214,6 +213,12 @@ func (m *Model) openFeaturePicker() {
 	m.ensureFeatureCursorVisible()
 	m.modal = modalConfigFeature
 	m.actionErr = nil
+}
+
+func (m *Model) openFeatureOptionsInput(id string, returnToFeatures bool) {
+	m.configEditFeatureID = id
+	m.configInputReturnFeature = returnToFeatures
+	m.openConfigInput(configEditFeatureOptions, featureOptionsString(m.configDoc.Features[id]), "version=latest, option=true")
 }
 
 func (m *Model) openConfigSaveConfirmation() {
@@ -319,21 +324,16 @@ func (m Model) selectedConfigRow() (configRow, bool) {
 }
 
 func (m Model) configRows() []configRow {
+	featureSummary := fmt.Sprintf("%d configured", len(m.configDoc.Features))
+	if len(m.configDoc.Features) == 0 {
+		featureSummary = "Browse catalog or type a feature ID"
+	}
 	rows := []configRow{
 		{kind: configRowField, edit: configEditName, label: "Name", value: m.configDoc.Name},
 		{kind: configRowField, edit: configEditImage, label: "Base image", value: m.configDoc.Image},
 		{kind: configRowField, edit: configEditRemoteUser, label: "Remote user", value: m.configDoc.RemoteUser},
 		{kind: configRowField, edit: configEditPostCreate, label: "Post create", value: m.configDoc.PostCreateCommand},
-		{kind: configRowAddFeature, label: "+ Add feature", value: "Browse catalog or type a feature ID"},
-	}
-
-	featureIDs := make([]string, 0, len(m.configDoc.Features))
-	for id := range m.configDoc.Features {
-		featureIDs = append(featureIDs, id)
-	}
-	sort.Strings(featureIDs)
-	for _, id := range featureIDs {
-		rows = append(rows, configRow{kind: configRowFeature, label: "Feature", value: id, id: id})
+		{kind: configRowFeatures, label: "Features", value: featureSummary},
 	}
 
 	rows = append(rows, configRow{kind: configRowAddExtension, label: "+ Add extension", value: "VS Code extension ID"})
@@ -341,6 +341,42 @@ func (m Model) configRows() []configRow {
 		rows = append(rows, configRow{kind: configRowExtension, label: "Extension", value: extension, index: index})
 	}
 	return rows
+}
+
+func (m Model) configuredFeatureIDs() []string {
+	featureIDs := make([]string, 0, len(m.configDoc.Features))
+	for id := range m.configDoc.Features {
+		featureIDs = append(featureIDs, id)
+	}
+	sort.Strings(featureIDs)
+	return featureIDs
+}
+
+func (m Model) featureModalItems() []configFeatureModalItem {
+	configured := m.configuredFeatureIDs()
+	manualID := strings.TrimSpace(m.featureSearchInput.Value())
+	items := make([]configFeatureModalItem, 0, len(configured)+len(m.visibleFeatures)+1)
+	if manualID != "" {
+		items = append(items, configFeatureModalItem{
+			kind: configFeatureModalManual,
+			id:   manualID,
+		})
+	}
+	for _, id := range configured {
+		items = append(items, configFeatureModalItem{
+			kind:    configFeatureModalConfigured,
+			id:      id,
+			options: m.configDoc.Features[id],
+		})
+	}
+	for _, feature := range m.visibleFeatures {
+		items = append(items, configFeatureModalItem{
+			kind: configFeatureModalCatalog,
+			id:   feature.ID,
+			name: feature.Name,
+		})
+	}
+	return items
 }
 
 func (m Model) selectedContainer() (domain.Container, bool) {
@@ -483,7 +519,7 @@ func (m *Model) moveConfigCursor(delta int) {
 }
 
 func (m *Model) moveFeatureCursor(delta int) {
-	if len(m.visibleFeatures) == 0 {
+	if len(m.featureModalItems()) == 0 {
 		m.featureCursor = 0
 		m.featureOffset = 0
 		return
@@ -538,7 +574,8 @@ func (m *Model) ensureConfigCursorBounds() {
 }
 
 func (m *Model) ensureFeatureCursorBounds() {
-	if len(m.visibleFeatures) == 0 {
+	items := m.featureModalItems()
+	if len(items) == 0 {
 		m.featureCursor = 0
 		m.featureOffset = 0
 		return
@@ -546,8 +583,8 @@ func (m *Model) ensureFeatureCursorBounds() {
 	if m.featureCursor < 0 {
 		m.featureCursor = 0
 	}
-	if m.featureCursor >= len(m.visibleFeatures) {
-		m.featureCursor = len(m.visibleFeatures) - 1
+	if m.featureCursor >= len(items) {
+		m.featureCursor = len(items) - 1
 	}
 }
 
@@ -607,7 +644,7 @@ func (m *Model) ensureFeatureCursorVisible() {
 	if m.featureCursor >= m.featureOffset+rows {
 		m.featureOffset = m.featureCursor - rows + 1
 	}
-	if m.featureOffset < 0 || len(m.visibleFeatures) == 0 {
+	if m.featureOffset < 0 || len(m.featureModalItems()) == 0 {
 		m.featureOffset = 0
 	}
 }

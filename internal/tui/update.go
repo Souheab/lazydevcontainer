@@ -452,20 +452,32 @@ func (m Model) updateConfigInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 	case key.Matches(msg, m.keys.Cancel):
 		m.modal = modalNone
+		if m.configInputReturnFeature {
+			m.modal = modalConfigFeature
+			m.featureSearchInput.Focus()
+		}
 		m.configInput.Blur()
 		m.configEdit = configEditNone
 		m.configEditFeatureID = ""
 		m.configEditExtensionIndex = -1
+		m.configInputReturnFeature = false
 		return m, nil
 	case key.Matches(msg, m.keys.Confirm):
 		m.applyConfigInputValue(m.configInput.Value())
 		m.modal = modalNone
+		if m.configInputReturnFeature {
+			m.modal = modalConfigFeature
+			m.featureSearchInput.Focus()
+		}
 		m.configInput.Blur()
 		m.configEdit = configEditNone
 		m.configEditFeatureID = ""
 		m.configEditExtensionIndex = -1
+		m.configInputReturnFeature = false
 		m.ensureConfigCursorBounds()
 		m.ensureConfigCursorVisible()
+		m.ensureFeatureCursorBounds()
+		m.ensureFeatureCursorVisible()
 		return m, nil
 	}
 
@@ -494,10 +506,37 @@ func (m Model) updateConfigFeatureModal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, m.keys.PageDown):
 		m.moveFeatureCursor(5)
 		return m, nil
+	case key.Matches(msg, m.keys.Delete):
+		items := m.featureModalItems()
+		if m.featureCursor < 0 || m.featureCursor >= len(items) || items[m.featureCursor].kind != configFeatureModalConfigured {
+			m.setActionError("Select a configured feature to remove")
+			return m, nil
+		}
+		delete(m.configDoc.Features, items[m.featureCursor].id)
+		m.configDirty = true
+		m.actionStatus = "Config changed"
+		m.actionErr = nil
+		m.ensureFeatureCursorBounds()
+		m.ensureFeatureCursorVisible()
+		return m, nil
 	case key.Matches(msg, m.keys.Confirm):
-		m.addSelectedFeature()
-		m.modal = modalNone
-		m.featureSearchInput.Blur()
+		items := m.featureModalItems()
+		if m.featureCursor >= 0 && m.featureCursor < len(items) {
+			item := items[m.featureCursor]
+			switch item.kind {
+			case configFeatureModalConfigured:
+				m.openFeatureOptionsInput(item.id, true)
+				return m, textinput.Blink
+			case configFeatureModalManual, configFeatureModalCatalog:
+				m.addFeatureID(item.id)
+				m.ensureFeatureCursorBounds()
+				m.ensureFeatureCursorVisible()
+				return m, nil
+			}
+		}
+		m.addFeatureID(m.featureSearchInput.Value())
+		m.ensureFeatureCursorBounds()
+		m.ensureFeatureCursorVisible()
 		return m, nil
 	}
 
