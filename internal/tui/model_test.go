@@ -13,6 +13,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	devconfig "github.com/Souheab/lazydevcontainer/internal/config"
 	"github.com/Souheab/lazydevcontainer/internal/domain"
 	containerfilter "github.com/Souheab/lazydevcontainer/internal/filter"
 )
@@ -391,6 +392,142 @@ func TestTemplateWriteFailureReportsError(t *testing.T) {
 	}
 	if m.templateWriteInProgress || m.actionErr == nil || m.actionStatus != "Template write failed" {
 		t.Fatalf("unexpected failure state: writing=%v status=%q err=%v", m.templateWriteInProgress, m.actionStatus, m.actionErr)
+	}
+}
+
+func TestConfigTabSwitchingShowsConfig(t *testing.T) {
+	m := testModel(nil)
+	m.configDoc = devconfig.ConfigDocument{Path: filepath.Join(t.TempDir(), ".devcontainer", "devcontainer.json")}
+	m.configLoading = false
+
+	m = updateModel(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'C'}})
+
+	if m.activeTab != tabConfig {
+		t.Fatalf("expected config tab, got %v", m.activeTab)
+	}
+	if !strings.Contains(stripANSI(m.renderHeaderPane()), "[Config]") {
+		t.Fatalf("header should show active config tab: %q", stripANSI(m.renderHeaderPane()))
+	}
+}
+
+func TestConfigFieldEditMarksDirty(t *testing.T) {
+	m := testModel(nil)
+	m.configLoading = false
+	m.configDoc = devconfig.ConfigDocument{Path: filepath.Join(t.TempDir(), ".devcontainer", "devcontainer.json")}
+	m = updateModel(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'C'}})
+	m = updateModel(t, m, tea.KeyMsg{Type: tea.KeyEnter})
+	if m.modal != modalConfigInput {
+		t.Fatalf("expected config input modal, got %v", m.modal)
+	}
+
+	for _, r := range "Demo" {
+		m = updateModel(t, m, runeKey(r))
+	}
+	m = updateModel(t, m, tea.KeyMsg{Type: tea.KeyEnter})
+
+	if !m.configDirty || m.configDoc.Name != "Demo" {
+		t.Fatalf("expected dirty renamed config, dirty=%v name=%q", m.configDirty, m.configDoc.Name)
+	}
+}
+
+func TestConfigFeatureAddAndRemove(t *testing.T) {
+	m := testModel(nil)
+	m.configLoading = false
+	m.featureCatalogLoading = false
+	m.configDoc = devconfig.ConfigDocument{Path: filepath.Join(t.TempDir(), ".devcontainer", "devcontainer.json"), Features: map[string]map[string]any{}}
+	m.featureCatalog = []devconfig.Feature{{ID: "ghcr.io/devcontainers/features/go:1", Name: "Go"}}
+	m.applyFeatureFilters()
+	m = updateModel(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'C'}})
+
+	m = updateModel(t, m, runeKey('/'))
+	if m.modal != modalConfigFeature {
+		t.Fatalf("expected feature modal, got %v", m.modal)
+	}
+	m = updateModel(t, m, tea.KeyMsg{Type: tea.KeyEnter})
+	if !m.configDirty {
+		t.Fatal("expected adding feature to mark config dirty")
+	}
+	if _, ok := m.configDoc.Features["ghcr.io/devcontainers/features/go:1"]; !ok {
+		t.Fatalf("feature was not added: %+v", m.configDoc.Features)
+	}
+
+	for index, row := range m.configRows() {
+		if row.kind == configRowFeature {
+			m.configCursor = index
+			break
+		}
+	}
+	m = updateModel(t, m, tea.KeyMsg{Type: tea.KeyDelete})
+	if _, ok := m.configDoc.Features["ghcr.io/devcontainers/features/go:1"]; ok {
+		t.Fatalf("feature was not removed: %+v", m.configDoc.Features)
+	}
+}
+
+func TestConfigSaveConfirmationWritesFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, ".devcontainer", "devcontainer.json")
+	m := testModel(nil)
+	m.configLoading = false
+	m.configDoc = devconfig.ConfigDocument{Path: path, Name: "Demo"}
+	m.configDirty = true
+	m = updateModel(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'C'}})
+	m = updateModel(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'S'}})
+	if m.modal != modalConfirmConfigSave {
+		t.Fatalf("expected save confirmation, got %v", m.modal)
+	}
+
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m, ok := next.(Model)
+	if !ok {
+		t.Fatalf("expected tui.Model, got %T", next)
+	}
+	if cmd == nil || !m.configSaving {
+		t.Fatalf("expected save command, saving=%v cmd=%v", m.configSaving, cmd)
+	}
+	completed, ok := cmd().(configSavedMsg)
+	if !ok {
+		t.Fatalf("expected configSavedMsg")
+	}
+	if completed.err != nil {
+		t.Fatalf("unexpected save error: %v", completed.err)
+	}
+	m = updateModel(t, m, completed)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.configDirty || !strings.Contains(string(data), `"name": "Demo"`) {
+		t.Fatalf("unexpected saved state dirty=%v data=%s", m.configDirty, data)
+	}
+}
+
+func TestConfigUnsavedChangesPromptBeforeLeaving(t *testing.T) {
+	m := testModel(nil)
+	m.configLoading = false
+	m.configDirty = true
+	m.activeTab = tabConfig
+
+	m = updateModel(t, m, runeKey('t'))
+
+	if m.modal != modalConfirmConfigDiscard || m.pendingConfigTab != tabTemplates || m.activeTab != tabConfig {
+		t.Fatalf("expected discard confirmation, modal=%v pending=%v active=%v", m.modal, m.pendingConfigTab, m.activeTab)
+	}
+}
+
+func TestConfigMultipleCandidatesOpenPicker(t *testing.T) {
+	dir := t.TempDir()
+	first := filepath.Join(dir, ".devcontainer", "devcontainer.json")
+	second := filepath.Join(dir, ".devcontainer", "api", "devcontainer.json")
+	m := testModel(nil)
+	m.configLoading = false
+	m.configCandidatePicked = false
+	m.configCandidates = []devconfig.ConfigCandidate{{Path: first, Exists: true}, {Path: second, Exists: true}}
+	m.configDoc = devconfig.ConfigDocument{Path: first}
+
+	m = updateModel(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'C'}})
+
+	if m.modal != modalConfigCandidate {
+		t.Fatalf("expected config candidate picker, got %v", m.modal)
 	}
 }
 

@@ -24,12 +24,15 @@ type keyMap struct {
 	Editor        key.Binding
 	ContainersTab key.Binding
 	TemplatesTab  key.Binding
+	ConfigTab     key.Binding
 	FilterMenu    key.Binding
 	FilterAll     key.Binding
 	FilterDev     key.Binding
 	FilterDocker  key.Binding
 	CycleFilter   key.Binding
 	ReverseFilter key.Binding
+	Save          key.Binding
+	Delete        key.Binding
 	Help          key.Binding
 }
 
@@ -56,25 +59,28 @@ func newKeyMap() keyMap {
 		Editor:        key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "edit")),
 		ContainersTab: key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "containers")),
 		TemplatesTab:  key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "templates")),
+		ConfigTab:     key.NewBinding(key.WithKeys("C"), key.WithHelp("C", "config")),
 		FilterMenu:    key.NewBinding(key.WithKeys("f"), key.WithHelp("f", "filter")),
 		FilterAll:     key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "all")),
 		FilterDev:     key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "devcontainers")),
 		FilterDocker:  key.NewBinding(key.WithKeys("o"), key.WithHelp("o", "containers")),
 		CycleFilter:   key.NewBinding(key.WithKeys("tab"), key.WithHelp("tab", "filter")),
 		ReverseFilter: key.NewBinding(key.WithKeys("shift+tab"), key.WithHelp("shift+tab", "prev filter")),
+		Save:          key.NewBinding(key.WithKeys("S"), key.WithHelp("S", "save")),
+		Delete:        key.NewBinding(key.WithKeys("delete", "backspace"), key.WithHelp("del", "remove")),
 		Help:          key.NewBinding(key.WithKeys("?"), key.WithHelp("?", "help")),
 	}
 }
 
 func (k keyMap) ShortHelp() []key.Binding {
-	return []key.Binding{k.Up, k.Down, k.Search, k.TemplatesTab, k.ContainersTab, k.Help, k.Quit}
+	return []key.Binding{k.Up, k.Down, k.Search, k.TemplatesTab, k.ConfigTab, k.ContainersTab, k.Help, k.Quit}
 }
 
 func (k keyMap) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
 		{k.Up, k.Down, k.PageUp, k.PageDown, k.Top, k.Bottom},
-		{k.TemplatesTab, k.ContainersTab, k.FilterMenu, k.FilterAll, k.FilterDev, k.FilterDocker, k.CycleFilter},
-		{k.Search, k.StartStop, k.Restart, k.Shell, k.Editor, k.Refresh},
+		{k.TemplatesTab, k.ConfigTab, k.ContainersTab, k.FilterMenu, k.FilterAll, k.FilterDev, k.FilterDocker, k.CycleFilter},
+		{k.Search, k.Save, k.Delete, k.StartStop, k.Restart, k.Shell, k.Editor, k.Refresh},
 		{k.Cancel, k.Help, k.Quit},
 	}
 }
