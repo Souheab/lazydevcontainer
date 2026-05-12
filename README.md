@@ -118,3 +118,13 @@ make test
 make vet
 make build
 ```
+
+## Future development roadmap
+
+Features being considered for future implementation:
+
+- Custom user-defined templates
+- Template repository instead of hardcoded custom templates
+- Better modal UI/UX
+- Devcontainer.json editor (Add features/configurations)
+- All actions modal menu
