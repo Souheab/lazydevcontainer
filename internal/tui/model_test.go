@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
@@ -233,6 +235,162 @@ func TestRenderHeaderAndFooterUseSimplifiedLabels(t *testing.T) {
 	}
 	if !strings.Contains(strings.Split(footer, "\n")[0], "Keybindings") {
 		t.Fatalf("footer title should render in top border: %q", footer)
+	}
+}
+
+func TestTabSwitchingShowsTemplatesAndContainers(t *testing.T) {
+	m := testModel([]domain.Container{{ID: "1", ShortID: "111", Name: "api"}})
+
+	m = updateModel(t, m, runeKey('t'))
+	if m.activeTab != tabTemplates {
+		t.Fatalf("expected templates tab, got %v", m.activeTab)
+	}
+	if !strings.Contains(stripANSI(m.renderHeaderPane()), "[Templates]") {
+		t.Fatalf("header should show active templates tab: %q", stripANSI(m.renderHeaderPane()))
+	}
+
+	m = updateModel(t, m, runeKey('c'))
+	if m.activeTab != tabContainers {
+		t.Fatalf("expected containers tab, got %v", m.activeTab)
+	}
+	if !strings.Contains(stripANSI(m.renderHeaderPane()), "[Containers]") {
+		t.Fatalf("header should show active containers tab: %q", stripANSI(m.renderHeaderPane()))
+	}
+}
+
+func TestTemplateSearchFiltersCatalog(t *testing.T) {
+	m := testModel(nil)
+	m = updateModel(t, m, runeKey('t'))
+	m = updateModel(t, m, runeKey('/'))
+
+	for _, r := range "typescript web" {
+		m = updateModel(t, m, runeKey(r))
+	}
+
+	if m.templateQuery != "typescript web" {
+		t.Fatalf("expected template query, got %q", m.templateQuery)
+	}
+	if len(m.visibleTemplates) != 1 || m.visibleTemplates[0].ID != "node-typescript" {
+		t.Fatalf("unexpected visible templates after search: %+v", m.visibleTemplates)
+	}
+}
+
+func TestTemplateCreateConfirmationForMissingTarget(t *testing.T) {
+	m := testModel(nil)
+	m.targetDir = t.TempDir()
+	m = updateModel(t, m, runeKey('t'))
+	m = updateModel(t, m, tea.KeyMsg{Type: tea.KeyEnter})
+
+	if m.modal != modalConfirmTemplateWrite {
+		t.Fatalf("expected template confirmation modal, got %v", m.modal)
+	}
+	if m.pendingTemplate.ID == "" || m.pendingTemplateOverwrite {
+		t.Fatalf("unexpected pending template state: template=%+v overwrite=%v", m.pendingTemplate, m.pendingTemplateOverwrite)
+	}
+	if got := m.pendingTemplatePath; got != filepath.Join(m.targetDir, ".devcontainer", "devcontainer.json") {
+		t.Fatalf("target path = %q, want project devcontainer path", got)
+	}
+}
+
+func TestTemplateOverwriteConfirmationForExistingTarget(t *testing.T) {
+	m := testModel(nil)
+	m.targetDir = t.TempDir()
+	path := filepath.Join(m.targetDir, ".devcontainer", "devcontainer.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	m = updateModel(t, m, runeKey('t'))
+	m = updateModel(t, m, tea.KeyMsg{Type: tea.KeyEnter})
+
+	if m.modal != modalConfirmTemplateWrite || !m.pendingTemplateOverwrite {
+		t.Fatalf("expected overwrite confirmation, got modal=%v overwrite=%v", m.modal, m.pendingTemplateOverwrite)
+	}
+	if !strings.Contains(stripANSI(m.renderConfirmTemplateWriteModal()), "Overwrite existing") {
+		t.Fatalf("overwrite modal should warn about replacement: %q", stripANSI(m.renderConfirmTemplateWriteModal()))
+	}
+}
+
+func TestTemplateWriteCreatesDevcontainerJSON(t *testing.T) {
+	m := testModel(nil)
+	m.targetDir = t.TempDir()
+	m = updateModel(t, m, runeKey('t'))
+	m = updateModel(t, m, tea.KeyMsg{Type: tea.KeyEnter})
+
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m, ok := next.(Model)
+	if !ok {
+		t.Fatalf("expected tui.Model, got %T", next)
+	}
+	if cmd == nil || !m.templateWriteInProgress || m.modal != modalNone {
+		t.Fatalf("expected template write command, modal=%v writing=%v cmd=%v", m.modal, m.templateWriteInProgress, cmd)
+	}
+
+	msg := cmd()
+	completed, ok := msg.(templateWriteCompletedMsg)
+	if !ok {
+		t.Fatalf("expected templateWriteCompletedMsg, got %T", msg)
+	}
+	if completed.err != nil {
+		t.Fatalf("unexpected write error: %v", completed.err)
+	}
+
+	next, _ = m.Update(completed)
+	m, ok = next.(Model)
+	if !ok {
+		t.Fatalf("expected tui.Model, got %T", next)
+	}
+	data, err := os.ReadFile(filepath.Join(m.targetDir, ".devcontainer", "devcontainer.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), `"name": "Base Ubuntu"`) || !strings.Contains(m.actionStatus, "Created") {
+		t.Fatalf("unexpected written template or status: status=%q data=%s", m.actionStatus, data)
+	}
+}
+
+func TestTemplateWriteFailureReportsError(t *testing.T) {
+	m := testModel(nil)
+	blocker := filepath.Join(t.TempDir(), "not-a-directory")
+	if err := os.WriteFile(blocker, []byte("block"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	m = updateModel(t, m, runeKey('t'))
+	template, ok := m.selectedTemplate()
+	if !ok {
+		t.Fatal("expected selected template")
+	}
+	m.modal = modalConfirmTemplateWrite
+	m.pendingTemplate = template
+	m.pendingTemplatePath = filepath.Join(blocker, ".devcontainer", "devcontainer.json")
+
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m, ok = next.(Model)
+	if !ok {
+		t.Fatalf("expected tui.Model, got %T", next)
+	}
+	if cmd == nil {
+		t.Fatal("expected template write command")
+	}
+
+	completed, ok := cmd().(templateWriteCompletedMsg)
+	if !ok {
+		t.Fatalf("expected templateWriteCompletedMsg")
+	}
+	if completed.err == nil {
+		t.Fatal("expected write error")
+	}
+
+	next, _ = m.Update(completed)
+	m, ok = next.(Model)
+	if !ok {
+		t.Fatalf("expected tui.Model, got %T", next)
+	}
+	if m.templateWriteInProgress || m.actionErr == nil || m.actionStatus != "Template write failed" {
+		t.Fatalf("unexpected failure state: writing=%v status=%q err=%v", m.templateWriteInProgress, m.actionStatus, m.actionErr)
 	}
 }
 

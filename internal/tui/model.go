@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -17,6 +18,7 @@ import (
 
 	"github.com/Souheab/lazydevcontainer/internal/domain"
 	containerfilter "github.com/Souheab/lazydevcontainer/internal/filter"
+	devtemplates "github.com/Souheab/lazydevcontainer/internal/templates"
 )
 
 const (
@@ -50,6 +52,11 @@ type externalCommandFinishedMsg struct {
 	err  error
 }
 
+type templateWriteCompletedMsg struct {
+	path string
+	err  error
+}
+
 type modalMode int
 
 const (
@@ -57,6 +64,14 @@ const (
 	modalSearch
 	modalFilter
 	modalConfirmAction
+	modalConfirmTemplateWrite
+)
+
+type activeTab int
+
+const (
+	tabContainers activeTab = iota
+	tabTemplates
 )
 
 type actionKind int
@@ -76,33 +91,45 @@ type pendingAction struct {
 
 // Model is the Bubble Tea application state.
 type Model struct {
-	provider ContainerService
+	provider  ContainerService
+	targetDir string
 
-	containers []domain.Container
-	visible    []domain.Container
+	containers       []domain.Container
+	visible          []domain.Container
+	templates        []devtemplates.Template
+	visibleTemplates []devtemplates.Template
 
-	keys        keyMap
-	styles      styles
-	help        help.Model
-	searchInput textinput.Model
+	keys                keyMap
+	styles              styles
+	help                help.Model
+	searchInput         textinput.Model
+	templateSearchInput textinput.Model
 
-	filterMode containerfilter.Mode
-	query      string
-	modal      modalMode
+	activeTab     activeTab
+	filterMode    containerfilter.Mode
+	query         string
+	templateQuery string
+	modal         modalMode
 
-	filterCursor  int
-	pendingAction pendingAction
+	filterCursor             int
+	pendingAction            pendingAction
+	pendingTemplate          devtemplates.Template
+	pendingTemplatePath      string
+	pendingTemplateOverwrite bool
 
-	cursor int
-	offset int
-	width  int
-	height int
+	cursor         int
+	offset         int
+	templateCursor int
+	templateOffset int
+	width          int
+	height         int
 
-	loading          bool
-	actionInProgress bool
-	err              error
-	actionStatus     string
-	actionErr        error
+	loading                 bool
+	actionInProgress        bool
+	templateWriteInProgress bool
+	err                     error
+	actionStatus            string
+	actionErr               error
 }
 
 // New returns a TUI model wired to a container provider.
@@ -117,14 +144,33 @@ func New(provider ContainerService) Model {
 	searchInput.PlaceholderStyle = styles.Subtle
 	searchInput.Blur()
 
+	templateSearchInput := textinput.New()
+	templateSearchInput.Prompt = "/ "
+	templateSearchInput.Placeholder = "language, stack, feature..."
+	templateSearchInput.CharLimit = 256
+	templateSearchInput.PromptStyle = styles.Subtle
+	templateSearchInput.TextStyle = styles.Search
+	templateSearchInput.PlaceholderStyle = styles.Subtle
+	templateSearchInput.Blur()
+
+	targetDir, err := os.Getwd()
+	if err != nil {
+		targetDir = "."
+	}
+	catalog := devtemplates.Catalog()
+
 	return Model{
-		provider:    provider,
-		keys:        newKeyMap(),
-		styles:      styles,
-		help:        help.New(),
-		searchInput: searchInput,
-		filterMode:  containerfilter.ModeAll,
-		loading:     true,
+		provider:            provider,
+		targetDir:           targetDir,
+		templates:           catalog,
+		visibleTemplates:    devtemplates.Filter(catalog, ""),
+		keys:                newKeyMap(),
+		styles:              styles,
+		help:                help.New(),
+		searchInput:         searchInput,
+		templateSearchInput: templateSearchInput,
+		filterMode:          containerfilter.ModeAll,
+		loading:             true,
 	}
 }
 
@@ -140,7 +186,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		m.searchInput.Width = max(10, min(56, msg.Width-12))
+		m.templateSearchInput.Width = max(10, min(56, msg.Width-12))
 		m.ensureCursorVisible()
+		m.ensureTemplateCursorVisible()
 		return m, nil
 
 	case containersLoadedMsg:
@@ -182,6 +230,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case templateWriteCompletedMsg:
+		m.templateWriteInProgress = false
+		m.actionErr = msg.err
+		if msg.err != nil {
+			m.actionStatus = "Template write failed"
+			return m, nil
+		}
+		m.actionStatus = fmt.Sprintf("Created %s", msg.path)
+		return m, nil
+
 	case tea.KeyMsg:
 		if m.modal == modalSearch {
 			return m.updateSearch(msg)
@@ -191,6 +249,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.modal == modalConfirmAction {
 			return m.updateConfirmAction(msg)
+		}
+		if m.modal == modalConfirmTemplateWrite {
+			return m.updateConfirmTemplateWrite(msg)
 		}
 		return m.updateKey(msg)
 
@@ -227,14 +288,25 @@ func (m Model) updateSearch(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, m.keys.Cancel):
 		m.modal = modalNone
 		m.searchInput.Blur()
+		m.templateSearchInput.Blur()
 		return m, nil
 	case key.Matches(msg, m.keys.Confirm):
 		m.modal = modalNone
 		m.searchInput.Blur()
+		m.templateSearchInput.Blur()
 		return m, nil
 	}
 
 	var cmd tea.Cmd
+	if m.activeTab == tabTemplates {
+		m.templateSearchInput, cmd = m.templateSearchInput.Update(msg)
+		m.templateQuery = m.templateSearchInput.Value()
+		m.applyTemplateFilters()
+		m.ensureTemplateCursorBounds()
+		m.ensureTemplateCursorVisible()
+		return m, cmd
+	}
+
 	m.searchInput, cmd = m.searchInput.Update(msg)
 	m.query = m.searchInput.Value()
 	m.applyFilters()
@@ -244,6 +316,24 @@ func (m Model) updateSearch(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if key.Matches(msg, m.keys.TemplatesTab) {
+		m.activeTab = tabTemplates
+		m.actionErr = nil
+		m.ensureTemplateCursorBounds()
+		m.ensureTemplateCursorVisible()
+		return m, nil
+	}
+	if key.Matches(msg, m.keys.ContainersTab) {
+		m.activeTab = tabContainers
+		m.actionErr = nil
+		m.ensureCursorBounds()
+		m.ensureCursorVisible()
+		return m, nil
+	}
+	if m.activeTab == tabTemplates {
+		return m.updateTemplateKey(msg)
+	}
+
 	switch {
 	case key.Matches(msg, m.keys.Quit):
 		return m, tea.Quit
@@ -324,6 +414,58 @@ func (m Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+func (m Model) updateTemplateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch {
+	case key.Matches(msg, m.keys.Quit):
+		return m, tea.Quit
+	case key.Matches(msg, m.keys.Help):
+		m.help.ShowAll = !m.help.ShowAll
+		return m, nil
+	case key.Matches(msg, m.keys.Search):
+		m.modal = modalSearch
+		m.templateSearchInput.Focus()
+		return m, textinput.Blink
+	case key.Matches(msg, m.keys.Confirm):
+		m.openTemplateWriteConfirmation()
+		return m, nil
+	case key.Matches(msg, m.keys.Cancel):
+		if m.templateQuery != "" {
+			m.templateQuery = ""
+			m.templateSearchInput.SetValue("")
+			m.applyTemplateFilters()
+			m.ensureTemplateCursorBounds()
+			m.ensureTemplateCursorVisible()
+		}
+		return m, nil
+	case key.Matches(msg, m.keys.Up):
+		m.moveTemplateCursor(-1)
+		return m, nil
+	case key.Matches(msg, m.keys.Down):
+		m.moveTemplateCursor(1)
+		return m, nil
+	case key.Matches(msg, m.keys.PageUp):
+		m.moveTemplateCursor(-m.visibleRowCount())
+		return m, nil
+	case key.Matches(msg, m.keys.PageDown):
+		m.moveTemplateCursor(m.visibleRowCount())
+		return m, nil
+	case key.Matches(msg, m.keys.Home), key.Matches(msg, m.keys.Top):
+		m.templateCursor = 0
+		m.ensureTemplateCursorVisible()
+		return m, nil
+	case key.Matches(msg, m.keys.End), key.Matches(msg, m.keys.Bottom):
+		m.templateCursor = len(m.visibleTemplates) - 1
+		m.ensureTemplateCursorBounds()
+		m.ensureTemplateCursorVisible()
+		return m, nil
+	case key.Matches(msg, m.keys.Refresh), key.Matches(msg, m.keys.StartStop), key.Matches(msg, m.keys.Restart), key.Matches(msg, m.keys.Shell), key.Matches(msg, m.keys.Editor), key.Matches(msg, m.keys.FilterMenu):
+		m.setActionError("Switch to Containers for that action")
+		return m, nil
+	}
+
+	return m, nil
+}
+
 func (m Model) updateConfirmAction(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch {
 	case key.Matches(msg, m.keys.Quit):
@@ -342,6 +484,34 @@ func (m Model) updateConfirmAction(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.actionStatus = fmt.Sprintf("%s %s", actionVerb(action.kind), action.containerName)
 		m.actionErr = nil
 		return m, runContainerAction(m.provider, action)
+	}
+
+	return m, nil
+}
+
+func (m Model) updateConfirmTemplateWrite(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch {
+	case key.Matches(msg, m.keys.Quit):
+		return m, tea.Quit
+	case key.Matches(msg, m.keys.Cancel):
+		m.modal = modalNone
+		m.pendingTemplate = devtemplates.Template{}
+		m.pendingTemplatePath = ""
+		m.pendingTemplateOverwrite = false
+		m.actionStatus = "Template write cancelled"
+		m.actionErr = nil
+		return m, nil
+	case key.Matches(msg, m.keys.Confirm):
+		template := m.pendingTemplate
+		path := m.pendingTemplatePath
+		m.modal = modalNone
+		m.pendingTemplate = devtemplates.Template{}
+		m.pendingTemplatePath = ""
+		m.pendingTemplateOverwrite = false
+		m.templateWriteInProgress = true
+		m.actionStatus = fmt.Sprintf("Writing %s", path)
+		m.actionErr = nil
+		return m, writeTemplate(template, path)
 	}
 
 	return m, nil
@@ -385,6 +555,25 @@ func (m Model) updateFilterModal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
+	if m.activeTab == tabTemplates {
+		switch msg.Type {
+		case tea.MouseWheelUp:
+			m.moveTemplateCursor(-3)
+		case tea.MouseWheelDown:
+			m.moveTemplateCursor(3)
+		case tea.MouseLeft:
+			row := (msg.Y - headerPaneHeight() - 2) / rowHeight
+			if row >= 0 {
+				index := m.templateOffset + row
+				if index >= 0 && index < len(m.visibleTemplates) {
+					m.templateCursor = index
+					m.ensureTemplateCursorVisible()
+				}
+			}
+		}
+		return m, nil
+	}
+
 	switch msg.Type {
 	case tea.MouseWheelUp:
 		m.moveCursor(-3)
@@ -439,6 +628,22 @@ func runContainerAction(provider ContainerService, action pendingAction) tea.Cmd
 			err = errors.New("no container action selected")
 		}
 		return containerActionCompletedMsg{action: action, err: err}
+	}
+}
+
+func writeTemplate(template devtemplates.Template, path string) tea.Cmd {
+	return func() tea.Msg {
+		rendered, err := template.Render()
+		if err != nil {
+			return templateWriteCompletedMsg{path: path, err: fmt.Errorf("render devcontainer template: %w", err)}
+		}
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			return templateWriteCompletedMsg{path: path, err: fmt.Errorf("create .devcontainer directory: %w", err)}
+		}
+		if err := os.WriteFile(path, []byte(rendered), 0o644); err != nil {
+			return templateWriteCompletedMsg{path: path, err: fmt.Errorf("write devcontainer template: %w", err)}
+		}
+		return templateWriteCompletedMsg{path: path}
 	}
 }
 
@@ -499,6 +704,31 @@ func (m *Model) openRestartConfirmation() {
 		containerName: container.DisplayName(),
 	}
 	m.modal = modalConfirmAction
+	m.actionErr = nil
+}
+
+func (m *Model) openTemplateWriteConfirmation() {
+	template, ok := m.selectedTemplate()
+	if !ok {
+		m.setActionError("No template selected")
+		return
+	}
+
+	path := m.templateTargetPath()
+	_, err := os.Stat(path)
+	overwrite := false
+	if err == nil {
+		overwrite = true
+	} else if !errors.Is(err, os.ErrNotExist) {
+		m.setActionError(fmt.Sprintf("Could not inspect %s", path))
+		m.actionErr = err
+		return
+	}
+
+	m.pendingTemplate = template
+	m.pendingTemplatePath = path
+	m.pendingTemplateOverwrite = overwrite
+	m.modal = modalConfirmTemplateWrite
 	m.actionErr = nil
 }
 
@@ -614,6 +844,10 @@ func (m *Model) applyFilters() {
 	m.visible = containerfilter.Apply(m.containers, m.filterMode, m.query)
 }
 
+func (m *Model) applyTemplateFilters() {
+	m.visibleTemplates = devtemplates.Filter(m.templates, m.templateQuery)
+}
+
 func (m *Model) moveCursor(delta int) {
 	if len(m.visible) == 0 {
 		m.cursor = 0
@@ -624,6 +858,18 @@ func (m *Model) moveCursor(delta int) {
 	m.cursor += delta
 	m.ensureCursorBounds()
 	m.ensureCursorVisible()
+}
+
+func (m *Model) moveTemplateCursor(delta int) {
+	if len(m.visibleTemplates) == 0 {
+		m.templateCursor = 0
+		m.templateOffset = 0
+		return
+	}
+
+	m.templateCursor += delta
+	m.ensureTemplateCursorBounds()
+	m.ensureTemplateCursorVisible()
 }
 
 func (m *Model) ensureCursorBounds() {
@@ -640,6 +886,20 @@ func (m *Model) ensureCursorBounds() {
 	}
 }
 
+func (m *Model) ensureTemplateCursorBounds() {
+	if len(m.visibleTemplates) == 0 {
+		m.templateCursor = 0
+		m.templateOffset = 0
+		return
+	}
+	if m.templateCursor < 0 {
+		m.templateCursor = 0
+	}
+	if m.templateCursor >= len(m.visibleTemplates) {
+		m.templateCursor = len(m.visibleTemplates) - 1
+	}
+}
+
 func (m *Model) ensureCursorVisible() {
 	rows := m.visibleRowCount()
 	if rows <= 0 {
@@ -653,6 +913,22 @@ func (m *Model) ensureCursorVisible() {
 	}
 	if m.offset < 0 || len(m.visible) == 0 {
 		m.offset = 0
+	}
+}
+
+func (m *Model) ensureTemplateCursorVisible() {
+	rows := m.visibleRowCount()
+	if rows <= 0 {
+		rows = 1
+	}
+	if m.templateCursor < m.templateOffset {
+		m.templateOffset = m.templateCursor
+	}
+	if m.templateCursor >= m.templateOffset+rows {
+		m.templateOffset = m.templateCursor - rows + 1
+	}
+	if m.templateOffset < 0 || len(m.visibleTemplates) == 0 {
+		m.templateOffset = 0
 	}
 }
 
@@ -698,6 +974,17 @@ func (m Model) selectedID() string {
 	return m.visible[m.cursor].ID
 }
 
+func (m Model) selectedTemplate() (devtemplates.Template, bool) {
+	if m.templateCursor < 0 || m.templateCursor >= len(m.visibleTemplates) {
+		return devtemplates.Template{}, false
+	}
+	return m.visibleTemplates[m.templateCursor], true
+}
+
+func (m Model) templateTargetPath() string {
+	return filepath.Join(m.targetDir, ".devcontainer", "devcontainer.json")
+}
+
 func (m *Model) selectID(id string) {
 	if id == "" {
 		return
@@ -718,18 +1005,27 @@ func (m Model) renderHeaderPane() string {
 		}
 	}
 
-	status := fmt.Sprintf("%d total  %d devcontainers  %d shown  filter: %s", len(m.containers), devCount, len(m.visible), m.filterMode)
+	status := fmt.Sprintf("%s  %d total  %d dev  %d shown  %s", m.renderTabs(), len(m.containers), devCount, len(m.visible), m.filterMode)
+	if m.activeTab == tabTemplates {
+		status = fmt.Sprintf("%s  %d templates  %d shown  target: %s", m.renderTabs(), len(m.templates), len(m.visibleTemplates), m.targetDir)
+	}
 	if m.loading {
 		status += "  refreshing..."
 	}
-	if m.query != "" {
+	if m.activeTab == tabContainers && m.query != "" {
 		status += fmt.Sprintf("  search: %q", m.query)
+	}
+	if m.activeTab == tabTemplates && m.templateQuery != "" {
+		status += fmt.Sprintf("  search: %q", m.templateQuery)
 	}
 	if m.err != nil {
 		status += "  refresh failed"
 	}
 	if m.actionInProgress {
 		status += "  action running..."
+	}
+	if m.templateWriteInProgress {
+		status += "  writing template..."
 	}
 	if m.actionStatus != "" {
 		status += "  " + m.actionStatus
@@ -743,7 +1039,22 @@ func (m Model) renderHeaderPane() string {
 	return renderTitledPane(m.styles.Pane, m.styles.PaneBorder, m.styles.PaneTitle, "Status", body, paneInnerWidth(m.width), headerContentHeight)
 }
 
+func (m Model) renderTabs() string {
+	containers := "Containers"
+	templates := "Templates"
+	if m.activeTab == tabContainers {
+		containers = "[" + containers + "]"
+	} else {
+		templates = "[" + templates + "]"
+	}
+	return containers + " " + templates
+}
+
 func (m Model) renderMainPane() string {
+	if m.activeTab == tabTemplates {
+		return m.renderTemplatesMainPane()
+	}
+
 	contentHeight := containerContentHeight(m.height, m.help.ShowAll)
 	bodyHeight := max(1, contentHeight)
 	leftOuter, rightOuter := splitPaneOuterWidths(m.width)
@@ -761,6 +1072,101 @@ func (m Model) renderMainPane() string {
 	detailsPane := renderTitledPane(m.styles.Pane, m.styles.PaneBorder, m.styles.PaneTitle, "Details", m.renderDetails(bodyHeight, rightContentWidth), splitPaneInnerWidth(rightOuter), contentHeight)
 
 	return lipgloss.JoinHorizontal(lipgloss.Top, listPane, detailsPane)
+}
+
+func (m Model) renderTemplatesMainPane() string {
+	contentHeight := containerContentHeight(m.height, m.help.ShowAll)
+	bodyHeight := max(1, contentHeight)
+	leftOuter, rightOuter := splitPaneOuterWidths(m.width)
+	leftContentWidth := splitPaneContentWidth(leftOuter)
+	rightContentWidth := splitPaneContentWidth(rightOuter)
+	listRows := max(1, bodyHeight/rowHeight)
+	body := m.renderTemplateRows(listRows, leftContentWidth)
+	title := fmt.Sprintf("Templates %d of %d", selectedPosition(m.templateCursor, len(m.visibleTemplates)), len(m.visibleTemplates))
+
+	if lipgloss.Height(body) < bodyHeight {
+		body += strings.Repeat("\n", bodyHeight-lipgloss.Height(body))
+	}
+
+	listPane := renderTitledPane(m.styles.ActivePane, m.styles.ActiveBorder, m.styles.PaneTitle, title, body, splitPaneInnerWidth(leftOuter), contentHeight)
+	detailsPane := renderTitledPane(m.styles.Pane, m.styles.PaneBorder, m.styles.PaneTitle, "Preview", m.renderTemplatePreview(bodyHeight, rightContentWidth), splitPaneInnerWidth(rightOuter), contentHeight)
+
+	return lipgloss.JoinHorizontal(lipgloss.Top, listPane, detailsPane)
+}
+
+func (m Model) renderTemplateRows(rows int, rowWidth int) string {
+	if len(m.visibleTemplates) == 0 {
+		return m.styles.Empty.Render("No templates match the current search. Press esc to clear it.")
+	}
+
+	end := min(len(m.visibleTemplates), m.templateOffset+rows)
+	rendered := make([]string, 0, end-m.templateOffset)
+	for index := m.templateOffset; index < end; index++ {
+		rendered = append(rendered, m.renderTemplateRow(index, m.visibleTemplates[index], index == m.templateCursor, rowWidth))
+	}
+	return strings.Join(rendered, "\n")
+}
+
+func (m Model) renderTemplateRow(index int, template devtemplates.Template, selected bool, rowWidth int) string {
+	selector := " "
+	if selected {
+		selector = ">"
+	}
+
+	tagText := strings.Join(template.Tags, ", ")
+	prefixWidth := lipgloss.Width(selector) + 1
+	tagText = truncate(tagText, max(1, rowWidth-prefixWidth-2))
+	tagWidth := lipgloss.Width(tagText)
+	availableMainWidth := max(1, rowWidth-prefixWidth-tagWidth-2)
+	name := truncate(template.Name, availableMainWidth)
+	gapWidth := max(1, rowWidth-prefixWidth-lipgloss.Width(name)-tagWidth)
+
+	renderedName := m.styles.Name.Render(name)
+	renderedTags := m.styles.Status.Render(tagText)
+	description := truncate(template.Description, max(0, rowWidth-2))
+	if selected {
+		renderedName = name
+		renderedTags = tagText
+	}
+
+	firstLine := fmt.Sprintf("%s %s%s%s", selector, renderedName, strings.Repeat(" ", gapWidth), renderedTags)
+	secondLine := "  " + description
+	row := lipgloss.JoinVertical(lipgloss.Left, firstLine, secondLine, "")
+	style := m.styles.Row.Width(rowWidth)
+	if selected {
+		style = m.styles.SelectedRow.Width(rowWidth)
+	}
+
+	_ = index
+	return style.Render(row)
+}
+
+func (m Model) renderTemplatePreview(bodyHeight int, width int) string {
+	template, ok := m.selectedTemplate()
+	if !ok {
+		return fillHeight(m.styles.Empty.Render("Select a template to preview devcontainer.json."), bodyHeight)
+	}
+
+	rendered, err := template.Render()
+	if err != nil {
+		return fillHeight(m.styles.Error.Render(err.Error()), bodyHeight)
+	}
+
+	lines := []string{}
+	lines = appendDetail(lines, "Template", template.Name, width, m.styles)
+	lines = appendDetail(lines, "Description", template.Description, width, m.styles)
+	lines = appendDetail(lines, "Target", m.templateTargetPath(), width, m.styles)
+	lines = append(lines, m.styles.Subtle.Render("devcontainer.json"))
+	for _, line := range strings.Split(strings.TrimRight(rendered, "\n"), "\n") {
+		lines = append(lines, truncate(line, width))
+	}
+
+	body := strings.Join(lines, "\n")
+	if lipgloss.Height(body) > bodyHeight {
+		bodyLines := strings.Split(body, "\n")
+		body = strings.Join(bodyLines[:bodyHeight], "\n")
+	}
+	return fillHeight(body, bodyHeight)
 }
 
 func (m Model) renderRows(rows int, rowWidth int) string {
@@ -890,6 +1296,8 @@ func (m Model) renderModal() string {
 		return m.renderFilterModal()
 	case modalConfirmAction:
 		return m.renderConfirmActionModal()
+	case modalConfirmTemplateWrite:
+		return m.renderConfirmTemplateWriteModal()
 	default:
 		return ""
 	}
@@ -897,10 +1305,16 @@ func (m Model) renderModal() string {
 
 func (m Model) renderSearchModal() string {
 	width := max(32, min(64, m.width-8))
-	m.searchInput.Width = max(10, width-8)
+	input := m.searchInput
+	title := "[/] Search containers"
+	if m.activeTab == tabTemplates {
+		input = m.templateSearchInput
+		title = "[/] Search templates"
+	}
+	input.Width = max(10, width-8)
 	body := strings.Join([]string{
-		m.styles.PaneTitle.Render("[/] Search containers"),
-		m.searchInput.View(),
+		m.styles.PaneTitle.Render(title),
+		input.View(),
 		m.styles.Subtle.Render("enter applies  esc closes"),
 	}, "\n")
 	modal := m.styles.Modal.Width(width).Render(body)
@@ -930,6 +1344,24 @@ func (m Model) renderConfirmActionModal() string {
 	body := strings.Join([]string{
 		m.styles.PaneTitle.Render("[enter] Confirm action"),
 		fmt.Sprintf("%s %s?", actionPrompt(action.kind), action.containerName),
+		m.styles.Subtle.Render("enter confirms  esc cancels"),
+	}, "\n")
+	modal := m.styles.Modal.Width(width).Render(body)
+	return lipgloss.Place(m.width, max(m.height, lipgloss.Height(modal)), lipgloss.Center, lipgloss.Center, modal)
+}
+
+func (m Model) renderConfirmTemplateWriteModal() string {
+	width := max(42, min(78, m.width-8))
+	action := "Create"
+	detail := fmt.Sprintf("Create %s in %s?", filepath.Base(m.pendingTemplatePath), filepath.Dir(filepath.Dir(m.pendingTemplatePath)))
+	if m.pendingTemplateOverwrite {
+		action = "Overwrite"
+		detail = fmt.Sprintf("Overwrite existing %s?", m.pendingTemplatePath)
+	}
+	body := strings.Join([]string{
+		m.styles.PaneTitle.Render("[enter] " + action + " devcontainer"),
+		fmt.Sprintf("%s template: %s", action, m.pendingTemplate.Name),
+		wrap(detail, max(24, width-4)),
 		m.styles.Subtle.Render("enter confirms  esc cancels"),
 	}, "\n")
 	modal := m.styles.Modal.Width(width).Render(body)

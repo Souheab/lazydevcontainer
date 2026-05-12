@@ -13,6 +13,8 @@ lazydc is a terminal UI for viewing and controlling Docker containers with devco
 - Starts, stops, and restarts selected containers after confirmation.
 - Opens an interactive shell in the selected container.
 - Opens a detected devcontainer workspace path in `$EDITOR`.
+- Browses built-in devcontainer templates for common languages and stacks.
+- Previews and writes `.devcontainer/devcontainer.json` templates into the current directory.
 - Supports keyboard, Vim-style movement, and mouse input.
 - Refreshes without leaving the TUI.
 
@@ -61,6 +63,8 @@ make run
 | `f` | Open filter modal |
 | `enter` | Confirm modal selection |
 | `esc` | Close modal or clear an active search |
+| `t` | Open templates tab |
+| `c` | Open containers tab |
 | `a` | Show all containers |
 | `d` | Show only devcontainers |
 | `o` | Show only ordinary Docker containers |
@@ -75,6 +79,26 @@ make run
 | `q` / `ctrl+c` | Quit |
 
 Mouse wheel scrolling and click-to-select are enabled.
+
+## Devcontainer templates
+
+Press `t` to open the Templates tab. The left pane lists built-in single-file templates and the right pane previews the `devcontainer.json` that will be written. Press `/` in the Templates tab to search by language, stack, tag, or description.
+
+Press `enter` on a template to create `.devcontainer/devcontainer.json` in the directory where `lazydc` was launched. If the file already exists, lazydc shows an overwrite confirmation before replacing it. Version 1 templates only write `devcontainer.json`; they do not create Dockerfiles, Compose files, lockfiles, or app helper files.
+
+Built-in templates:
+
+- Base Ubuntu
+- Go
+- Node/TypeScript
+- Python
+- Rust
+- Java
+- .NET
+- PHP
+- Ruby
+- C/C++
+- Nix/Base
 
 ## Devcontainer detection
 
