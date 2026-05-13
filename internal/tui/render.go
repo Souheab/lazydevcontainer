@@ -504,9 +504,8 @@ func (m Model) renderConfirmActionModal() string {
 	width := max(34, min(64, m.width-8))
 	action := m.pendingAction
 	body := strings.Join([]string{
-		m.styles.PaneTitle.Render("[enter] Confirm action"),
-		fmt.Sprintf("%s %s?", actionPrompt(action.kind), action.containerName),
-		m.styles.Subtle.Render("enter confirms  esc cancels"),
+		m.styles.ModalTitle.Render("Confirm action"),
+		confirmPrompt(fmt.Sprintf("%s %s?", actionPrompt(action.kind), action.containerName), m.styles),
 	}, "\n")
 	return m.styles.Modal.Width(width).Render(body)
 }
@@ -520,10 +519,9 @@ func (m Model) renderConfirmTemplateWriteModal() string {
 		detail = fmt.Sprintf("Overwrite existing %s?", m.pendingTemplatePath)
 	}
 	body := strings.Join([]string{
-		m.styles.PaneTitle.Render("[enter] " + action + " devcontainer"),
+		m.styles.ModalTitle.Render(action + " devcontainer"),
 		fmt.Sprintf("%s template: %s", action, m.pendingTemplate.Name),
-		wrap(detail, max(24, width-4)),
-		m.styles.Subtle.Render("enter confirms  esc cancels"),
+		wrap(confirmPrompt(detail, m.styles), max(24, width-4)),
 	}, "\n")
 	return m.styles.Modal.Width(width).Render(body)
 }
@@ -623,9 +621,8 @@ func (m Model) renderConfigCandidateModal() string {
 func (m Model) renderConfirmConfigSaveModal() string {
 	width := max(42, min(78, m.width-8))
 	body := strings.Join([]string{
-		m.styles.PaneTitle.Render("[enter] Save devcontainer"),
-		wrap(fmt.Sprintf("Write changes to %s?", m.configDoc.Path), max(24, width-4)),
-		m.styles.Subtle.Render("enter confirms  esc cancels"),
+		m.styles.ModalTitle.Render("Save devcontainer"),
+		wrap(confirmPrompt(fmt.Sprintf("Write changes to %s?", m.configDoc.Path), m.styles), max(24, width-4)),
 	}, "\n")
 	return m.styles.Modal.Width(width).Render(body)
 }
@@ -633,11 +630,14 @@ func (m Model) renderConfirmConfigSaveModal() string {
 func (m Model) renderConfirmConfigDiscardModal() string {
 	width := max(42, min(78, m.width-8))
 	body := strings.Join([]string{
-		m.styles.PaneTitle.Render("[enter] Discard config changes"),
-		"Discard unsaved devcontainer config changes?",
-		m.styles.Subtle.Render("enter discards  esc returns"),
+		m.styles.ModalTitle.Render("Discard config changes"),
+		confirmPrompt("Discard unsaved devcontainer config changes?", m.styles),
 	}, "\n")
 	return m.styles.Modal.Width(width).Render(body)
+}
+
+func confirmPrompt(prompt string, s styles) string {
+	return prompt + " Press " + s.ConfirmKey.Render("[y/n]")
 }
 
 func overlay(width, height int, base, layer string) string {

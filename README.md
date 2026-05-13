@@ -61,7 +61,8 @@ make run
 | `G` / `end` | Jump to bottom |
 | `/` | Open search modal |
 | `f` | Open filter modal |
-| `enter` | Confirm modal selection |
+| `y` / `n` | Answer confirmation prompts |
+| `enter` | Confirm modal selection, or default "no" on `[y/N]` prompts |
 | `esc` | Close modal or clear an active search |
 | `t` | Open templates tab |
 | `c` | Open containers tab |

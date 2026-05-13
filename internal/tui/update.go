@@ -399,13 +399,13 @@ func (m Model) updateConfirmAction(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch {
 	case key.Matches(msg, m.keys.Quit):
 		return m, tea.Quit
-	case key.Matches(msg, m.keys.Cancel):
+	case key.Matches(msg, m.keys.Cancel), key.Matches(msg, m.keys.Confirm), isNoKey(msg):
 		m.modal = modalNone
 		m.pendingAction = pendingAction{}
 		m.actionStatus = "Action cancelled"
 		m.actionErr = nil
 		return m, nil
-	case key.Matches(msg, m.keys.Confirm):
+	case isYesKey(msg):
 		action := m.pendingAction
 		m.modal = modalNone
 		m.pendingAction = pendingAction{}
@@ -422,7 +422,7 @@ func (m Model) updateConfirmTemplateWrite(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch {
 	case key.Matches(msg, m.keys.Quit):
 		return m, tea.Quit
-	case key.Matches(msg, m.keys.Cancel):
+	case key.Matches(msg, m.keys.Cancel), key.Matches(msg, m.keys.Confirm), isNoKey(msg):
 		m.modal = modalNone
 		m.pendingTemplate = devtemplates.Template{}
 		m.pendingTemplatePath = ""
@@ -430,7 +430,7 @@ func (m Model) updateConfirmTemplateWrite(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.actionStatus = "Template write cancelled"
 		m.actionErr = nil
 		return m, nil
-	case key.Matches(msg, m.keys.Confirm):
+	case isYesKey(msg):
 		template := m.pendingTemplate
 		path := m.pendingTemplatePath
 		m.modal = modalNone
@@ -591,12 +591,12 @@ func (m Model) updateConfirmConfigSave(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch {
 	case key.Matches(msg, m.keys.Quit):
 		return m, tea.Quit
-	case key.Matches(msg, m.keys.Cancel):
+	case key.Matches(msg, m.keys.Cancel), key.Matches(msg, m.keys.Confirm), isNoKey(msg):
 		m.modal = modalNone
 		m.actionStatus = "Config save cancelled"
 		m.actionErr = nil
 		return m, nil
-	case key.Matches(msg, m.keys.Confirm):
+	case isYesKey(msg):
 		m.modal = modalNone
 		m.configSaving = true
 		m.actionStatus = fmt.Sprintf("Saving %s", m.configDoc.Path)
@@ -611,11 +611,11 @@ func (m Model) updateConfirmConfigDiscard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch {
 	case key.Matches(msg, m.keys.Quit):
 		return m, tea.Quit
-	case key.Matches(msg, m.keys.Cancel):
+	case key.Matches(msg, m.keys.Cancel), key.Matches(msg, m.keys.Confirm), isNoKey(msg):
 		m.modal = modalNone
 		m.pendingConfigTab = tabConfig
 		return m, nil
-	case key.Matches(msg, m.keys.Confirm):
+	case isYesKey(msg):
 		m.configDirty = false
 		m.modal = modalNone
 		if m.pendingConfigTab != tabConfig {
@@ -627,6 +627,14 @@ func (m Model) updateConfirmConfigDiscard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 
 	return m, nil
+}
+
+func isYesKey(msg tea.KeyMsg) bool {
+	return msg.Type == tea.KeyRunes && len(msg.Runes) == 1 && (msg.Runes[0] == 'y' || msg.Runes[0] == 'Y')
+}
+
+func isNoKey(msg tea.KeyMsg) bool {
+	return msg.Type == tea.KeyRunes && len(msg.Runes) == 1 && (msg.Runes[0] == 'n' || msg.Runes[0] == 'N')
 }
 
 func (m Model) updateFilterModal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {

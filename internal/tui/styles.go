@@ -10,6 +10,8 @@ type styles struct {
 	ActiveBorder lipgloss.Style
 	PaneTitle    lipgloss.Style
 	Modal        lipgloss.Style
+	ModalTitle   lipgloss.Style
+	ConfirmKey   lipgloss.Style
 	Title        lipgloss.Style
 	Subtle       lipgloss.Style
 	Header       lipgloss.Style
@@ -38,7 +40,9 @@ func newStyles() styles {
 		PaneBorder:   lipgloss.NewStyle().Foreground(lipgloss.Color("252")),
 		ActiveBorder: lipgloss.NewStyle().Foreground(lipgloss.Color("114")),
 		PaneTitle:    lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("114")),
-		Modal:        lipgloss.NewStyle().Border(paneBorder).BorderForeground(lipgloss.Color("252")).Padding(1, 2),
+		Modal:        lipgloss.NewStyle().Border(paneBorder).BorderForeground(lipgloss.Color("75")).Padding(1, 2),
+		ModalTitle:   lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("255")),
+		ConfirmKey:   lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("114")),
 		Title:        lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("75")),
 		Subtle:       lipgloss.NewStyle().Foreground(lipgloss.Color("248")),
 		Header:       lipgloss.NewStyle().Foreground(lipgloss.Color("252")),

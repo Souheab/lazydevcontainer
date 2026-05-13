@@ -321,7 +321,7 @@ func TestTemplateWriteCreatesDevcontainerJSON(t *testing.T) {
 	m = updateModel(t, m, runeKey('t'))
 	m = updateModel(t, m, tea.KeyMsg{Type: tea.KeyEnter})
 
-	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	next, cmd := m.Update(runeKey('y'))
 	m, ok := next.(Model)
 	if !ok {
 		t.Fatalf("expected tui.Model, got %T", next)
@@ -368,7 +368,7 @@ func TestTemplateWriteFailureReportsError(t *testing.T) {
 	m.pendingTemplate = template
 	m.pendingTemplatePath = filepath.Join(blocker, ".devcontainer", "devcontainer.json")
 
-	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	next, cmd := m.Update(runeKey('y'))
 	m, ok = next.(Model)
 	if !ok {
 		t.Fatalf("expected tui.Model, got %T", next)
@@ -476,7 +476,7 @@ func TestConfigSaveConfirmationWritesFile(t *testing.T) {
 		t.Fatalf("expected save confirmation, got %v", m.modal)
 	}
 
-	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	next, cmd := m.Update(runeKey('y'))
 	m, ok := next.(Model)
 	if !ok {
 		t.Fatalf("expected tui.Model, got %T", next)
@@ -623,7 +623,7 @@ func TestConfirmActionDispatchesCommand(t *testing.T) {
 	m := testModelWithProvider(service)
 	m = updateModel(t, m, runeKey('s'))
 
-	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	next, cmd := m.Update(runeKey('y'))
 	m, ok := next.(Model)
 	if !ok {
 		t.Fatalf("expected tui.Model, got %T", next)
@@ -662,6 +662,23 @@ func TestCancelActionDoesNotDispatchCommand(t *testing.T) {
 	}
 	if m.modal != modalNone || m.pendingAction.kind != actionNone {
 		t.Fatalf("expected action to be cleared, got modal=%v action=%+v", m.modal, m.pendingAction)
+	}
+}
+
+func TestConfirmActionEnterDefaultsToNo(t *testing.T) {
+	m := testModel([]domain.Container{{ID: "1", ShortID: "111", Name: "api", State: "running"}})
+	m = updateModel(t, m, runeKey('s'))
+
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m, ok := next.(Model)
+	if !ok {
+		t.Fatalf("expected tui.Model, got %T", next)
+	}
+	if cmd != nil {
+		t.Fatal("expected no command for default no")
+	}
+	if m.modal != modalNone || m.pendingAction.kind != actionNone {
+		t.Fatalf("expected confirmation to cancel, got modal=%v action=%+v", m.modal, m.pendingAction)
 	}
 }
 
