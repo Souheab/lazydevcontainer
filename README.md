@@ -19,34 +19,73 @@ lazydc is a terminal UI control panel for devcontainers.
 - Refreshes without leaving the TUI.
 
 ## Requirements
-
-- Go 1.23 or newer.
 - Docker Engine reachable from the environment where lazydc runs.
 
 lazydc uses Docker environment configuration such as `DOCKER_HOST`. If running inside a devcontainer, the host Docker socket must already be mounted and accessible; this project does not change the devcontainer configuration for socket access.
 
-## Build
+## Run/Install
+
+### From source
+
+Install the latest version with Go:
 
 ```sh
-go build -o lazydc ./cmd/lazydc
+go install github.com/Souheab/lazydevcontainer/cmd/lazydc@latest
 ```
 
-Or use Make:
+Or build from a local checkout:
 
 ```sh
+git clone https://github.com/Souheab/lazydevcontainer.git
+cd lazydevcontainer
 make build
-```
-
-## Run
-
-```sh
 ./lazydc
 ```
 
-During development:
+### Nix/NixOS
+
+Run directly from the flake:
 
 ```sh
-make run
+nix run github:Souheab/lazydevcontainer
+```
+
+Or build froma local checkout:
+
+```sh
+git clone https://github.com/Souheab/lazydevcontainer.git
+cd lazydevcontainer
+nix build
+./result/bin/lazydc
+```
+
+To install lazydc permanently on NixOS, add this flake as an input and include its package in `environment.systemPackages`:
+
+```nix
+{
+  inputs.lazydc.url = "github:Souheab/lazydevcontainer";
+
+  outputs =
+    { nixpkgs, lazydc, ... }:
+    {
+      nixosConfigurations.my-host = nixpkgs.lib.nixosSystem {
+        system = "x86_64-linux";
+        modules = [
+          {
+            environment.systemPackages = [
+              lazydc.packages.x86_64-linux.default
+            ];
+          }
+        ];
+      };
+    };
+}
+```
+
+Replace `my-host` and `x86_64-linux` with the host name and system architecture you use. Rebuild after updating your configuration:
+
+```sh
+sudo nixos-rebuild switch --flake .#my-host
 ```
 
 ## Keybindings
