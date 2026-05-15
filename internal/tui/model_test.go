@@ -463,6 +463,118 @@ func TestConfigFeatureAddAndRemove(t *testing.T) {
 	}
 }
 
+func TestConfigFeatureSearchAddsHighlightedSuggestion(t *testing.T) {
+	m := testModel(nil)
+	m.configLoading = false
+	m.featureCatalogLoading = false
+	m.configDoc = devconfig.ConfigDocument{Path: filepath.Join(t.TempDir(), ".devcontainer", "devcontainer.json"), Features: map[string]map[string]any{}}
+	m.featureCatalog = []devconfig.Feature{
+		{ID: "ghcr.io/devcontainers/features/go:1", Name: "Go"},
+		{ID: "ghcr.io/devcontainers/features/node:1", Name: "Node.js"},
+	}
+	m.applyFeatureFilters()
+	m = updateModel(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'C'}})
+	m = updateModel(t, m, runeKey('/'))
+
+	for _, r := range "go" {
+		m = updateModel(t, m, runeKey(r))
+	}
+	plain := stripANSI(m.renderConfigFeatureModal())
+	if !strings.Contains(plain, "suggestions for \"go\"") || !strings.Contains(plain, "Go") {
+		t.Fatalf("feature modal should render search suggestions, got %q", plain)
+	}
+
+	m = updateModel(t, m, tea.KeyMsg{Type: tea.KeyEnter})
+
+	if _, ok := m.configDoc.Features["ghcr.io/devcontainers/features/go:1"]; !ok {
+		t.Fatalf("expected search suggestion to be added, features=%+v", m.configDoc.Features)
+	}
+	if _, ok := m.configDoc.Features["go"]; ok {
+		t.Fatalf("typed query should not be added before highlighted suggestion, features=%+v", m.configDoc.Features)
+	}
+}
+
+func TestConfigFeatureSearchBackspaceEditsQuery(t *testing.T) {
+	m := testModel(nil)
+	m.configLoading = false
+	m.featureCatalogLoading = false
+	m.configDoc = devconfig.ConfigDocument{Path: filepath.Join(t.TempDir(), ".devcontainer", "devcontainer.json"), Features: map[string]map[string]any{}}
+	m.featureCatalog = []devconfig.Feature{
+		{ID: "ghcr.io/devcontainers/features/go:1", Name: "Go"},
+		{ID: "ghcr.io/devcontainers/features/node:2", Name: "Node.js"},
+	}
+	m.applyFeatureFilters()
+	m = updateModel(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'C'}})
+	m = updateModel(t, m, runeKey('/'))
+
+	for _, r := range "node" {
+		m = updateModel(t, m, runeKey(r))
+	}
+	m = updateModel(t, m, tea.KeyMsg{Type: tea.KeyBackspace})
+
+	if got := m.featureSearchInput.Value(); got != "nod" {
+		t.Fatalf("feature query after backspace = %q, want nod", got)
+	}
+	if _, ok := m.configDoc.Features["ghcr.io/devcontainers/features/node:2"]; ok {
+		t.Fatalf("backspace should edit search, not add/remove features: %+v", m.configDoc.Features)
+	}
+}
+
+func TestConfigFeatureModalGroupsConfiguredAndAvailable(t *testing.T) {
+	m := testModel(nil)
+	m.configLoading = false
+	m.featureCatalogLoading = false
+	m.configDoc = devconfig.ConfigDocument{
+		Path: filepath.Join(t.TempDir(), ".devcontainer", "devcontainer.json"),
+		Features: map[string]map[string]any{
+			"ghcr.io/devcontainers/features/go:1": {"version": "latest"},
+		},
+	}
+	m.featureCatalog = []devconfig.Feature{
+		{ID: "ghcr.io/devcontainers/features/go:1", Name: "Go"},
+		{ID: "ghcr.io/devcontainers/features/node:1", Name: "Node.js"},
+	}
+	m.applyFeatureFilters()
+	m = updateModel(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'C'}})
+	m = updateModel(t, m, runeKey('/'))
+
+	plain := stripANSI(m.renderConfigFeatureModal())
+	for _, want := range []string{"Configured", "Available", "version=latest", "Node.js"} {
+		if !strings.Contains(plain, want) {
+			t.Fatalf("feature modal missing %q: %q", want, plain)
+		}
+	}
+
+	items := m.featureModalItems()
+	for _, item := range items {
+		if item.id == "ghcr.io/devcontainers/features/go:1" && item.kind == configFeatureModalCatalog {
+			t.Fatalf("configured feature should not be rendered as available: %+v", items)
+		}
+	}
+}
+
+func TestConfigFeatureModalShowsManualSectionForNewQuery(t *testing.T) {
+	m := testModel(nil)
+	m.configLoading = false
+	m.featureCatalogLoading = false
+	m.configDoc = devconfig.ConfigDocument{Path: filepath.Join(t.TempDir(), ".devcontainer", "devcontainer.json"), Features: map[string]map[string]any{}}
+	m.featureCatalog = []devconfig.Feature{{ID: "ghcr.io/devcontainers/features/go:1", Name: "Go"}}
+	m.applyFeatureFilters()
+	m = updateModel(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'C'}})
+	m = updateModel(t, m, runeKey('/'))
+
+	for _, r := range "ghcr.io/example/features/tool:1" {
+		m = updateModel(t, m, runeKey(r))
+	}
+
+	plain := stripANSI(m.renderConfigFeatureModal())
+	for _, want := range []string{"Available", "No matches. Press enter to add this as a manual feature ID.", "Manual", "Add typed feature ID"} {
+		if !strings.Contains(plain, want) {
+			t.Fatalf("feature modal missing %q: %q", want, plain)
+		}
+	}
+}
+
 func TestConfigSaveConfirmationWritesFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, ".devcontainer", "devcontainer.json")

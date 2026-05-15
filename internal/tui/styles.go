@@ -11,6 +11,11 @@ type styles struct {
 	PaneTitle    lipgloss.Style
 	Modal        lipgloss.Style
 	ModalTitle   lipgloss.Style
+	FeatureModal lipgloss.Style
+	FeaturePanel lipgloss.Style
+	InputFrame   lipgloss.Style
+	SectionTitle lipgloss.Style
+	FeatureRow   lipgloss.Style
 	ConfirmKey   lipgloss.Style
 	Title        lipgloss.Style
 	Subtle       lipgloss.Style
@@ -42,6 +47,11 @@ func newStyles() styles {
 		PaneTitle:    lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("114")),
 		Modal:        lipgloss.NewStyle().Border(paneBorder).BorderForeground(lipgloss.Color("75")).Padding(1, 2),
 		ModalTitle:   lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("255")),
+		FeatureModal: lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("255")).Padding(1, 2),
+		FeaturePanel: lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("255")).Padding(0, 1),
+		InputFrame:   lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("255")).Padding(0, 1),
+		SectionTitle: lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("255")),
+		FeatureRow:   lipgloss.NewStyle().Padding(0, 1),
 		ConfirmKey:   lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("114")),
 		Title:        lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("75")),
 		Subtle:       lipgloss.NewStyle().Foreground(lipgloss.Color("248")),

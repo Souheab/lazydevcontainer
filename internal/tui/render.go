@@ -548,54 +548,154 @@ func (m Model) renderConfigInputModal() string {
 }
 
 func (m Model) renderConfigFeatureModal() string {
-	width := max(56, min(94, m.width-8))
-	height := max(10, min(22, m.height-8))
+	width := max(64, min(110, m.width-6))
+	height := max(14, min(30, m.height-6))
 	input := m.featureSearchInput
-	input.Width = max(10, width-8)
+	panelWidth := width - 6
+	input.Width = max(10, panelWidth-6)
+	query := strings.TrimSpace(m.featureSearchInput.Value())
 	lines := []string{
-		m.styles.PaneTitle.Render("[/] Features"),
-		input.View(),
+		m.styles.ModalTitle.Render("Add Dev Container Feature"),
 	}
 
 	items := m.featureModalItems()
-	if len(items) == 0 {
-		if m.featureCatalogLoading {
-			lines = append(lines, m.styles.Empty.Render("Loading feature catalog..."))
-		} else {
-			lines = append(lines, m.styles.Empty.Render("No catalog match. Press enter to add typed feature ID."))
-		}
-	} else {
-		rowCount := max(1, height-5)
-		end := min(len(items), m.featureOffset+rowCount)
-		for index := m.featureOffset; index < end; index++ {
-			item := items[index]
-			selector := " "
-			text := item.id
-			switch item.kind {
-			case configFeatureModalConfigured:
-				text = "Configured  " + item.id
-				options := featureOptionsString(item.options)
-				if options != "" {
-					text += "  " + options
-				}
-			case configFeatureModalManual:
-				text = "Add typed ID  " + item.id
-			case configFeatureModalCatalog:
-				if item.name != "" {
-					text = item.name + "  " + item.id
-				}
-			}
-			text = truncate(text, width-6)
-			if index == m.featureCursor {
-				selector = ">"
-				text = m.styles.SelectedRow.Width(width - 5).Render(" " + text)
-			}
-			lines = append(lines, fmt.Sprintf("%s %s", selector, text))
+	configuredCount := featureModalItemCount(items, configFeatureModalConfigured)
+	availableCount := featureModalItemCount(items, configFeatureModalCatalog)
+	manualCount := featureModalItemCount(items, configFeatureModalManual)
+	status := fmt.Sprintf("%d configured  %d available", len(m.configDoc.Features), availableCount)
+	if query != "" {
+		status = fmt.Sprintf("%d suggestions for %q  %d configured", configuredCount+availableCount, query, len(m.configDoc.Features))
+	}
+	lines = append(lines, m.styles.Subtle.Render(truncate(status, width-4)))
+
+	rowCount := max(1, (height-16)/2)
+	end := min(len(items), m.featureOffset+rowCount)
+	visibleItems := items[m.featureOffset:end]
+	lines = append(lines, m.renderFeatureFilterPanel(panelWidth, input.View()))
+	lines = append(lines, m.renderFeatureModalPanel("Configured", visibleItems, configFeatureModalConfigured, m.featureOffset, panelWidth, noConfiguredFeatureMessage(configuredCount, query), ""))
+	lines = append(lines, m.renderFeatureModalAvailablePanel(visibleItems, m.featureOffset, panelWidth, availableFeatureMessage(availableCount, manualCount, query, m.featureCatalogLoading)))
+	lines = append(lines, m.styles.Subtle.Render("enter adds/edits selected  del removes configured  esc closes"))
+	body := strings.Join(lines, "\n")
+	return m.styles.FeatureModal.Width(width).Height(height).Render(body)
+}
+
+func featureModalItemCount(items []configFeatureModalItem, kind configFeatureModalItemKind) int {
+	count := 0
+	for _, item := range items {
+		if item.kind == kind {
+			count++
 		}
 	}
-	lines = append(lines, m.styles.Subtle.Render("enter edits configured or adds selection/typed ID  del removes configured  esc closes"))
-	body := strings.Join(lines, "\n")
-	return m.styles.Modal.Width(width).Height(height).Render(body)
+	return count
+}
+
+func noConfiguredFeatureMessage(configuredCount int, query string) string {
+	if configuredCount > 0 {
+		return ""
+	}
+	if query != "" {
+		return "No configured matches"
+	}
+	return "No configured features yet"
+}
+
+func availableFeatureMessage(availableCount int, manualCount int, query string, loading bool) string {
+	if availableCount > 0 {
+		return ""
+	}
+	if loading {
+		return "Loading feature catalog..."
+	}
+	if query != "" {
+		return "No matches. Press enter to add this as a manual feature ID."
+	}
+	if manualCount > 0 {
+		return ""
+	}
+	return "No available features"
+}
+
+func (m Model) renderFeatureModalPanel(title string, items []configFeatureModalItem, kind configFeatureModalItemKind, offset int, width int, empty string, prefix string) string {
+	lines := []string{m.styles.SectionTitle.Render(title)}
+	if prefix != "" {
+		lines = append(lines, prefix)
+	}
+	found := false
+	for index, item := range items {
+		if item.kind != kind {
+			continue
+		}
+		found = true
+		lines = append(lines, m.renderFeatureModalRow(item, offset+index, width))
+	}
+	if !found && empty != "" {
+		lines = append(lines, m.styles.Empty.Render("  "+empty))
+	}
+	return m.styles.FeaturePanel.Width(width).Render(strings.Join(lines, "\n"))
+}
+
+func (m Model) renderFeatureFilterPanel(width int, input string) string {
+	lines := []string{
+		m.styles.SectionTitle.Render("Filter features"),
+		m.styles.InputFrame.Width(width - 4).Render(input),
+	}
+	return m.styles.FeaturePanel.Width(width).Render(strings.Join(lines, "\n"))
+}
+
+func (m Model) renderFeatureModalAvailablePanel(items []configFeatureModalItem, offset int, width int, empty string) string {
+	lines := []string{
+		m.styles.SectionTitle.Render("Available"),
+	}
+	found := false
+	for index, item := range items {
+		if item.kind != configFeatureModalCatalog {
+			continue
+		}
+		found = true
+		lines = append(lines, m.renderFeatureModalRow(item, offset+index, width))
+	}
+	if !found && empty != "" {
+		lines = append(lines, m.styles.Empty.Render("  "+empty))
+	}
+	for index, item := range items {
+		if item.kind != configFeatureModalManual {
+			continue
+		}
+		lines = append(lines, m.styles.SectionTitle.Render("Manual"))
+		lines = append(lines, m.renderFeatureModalRow(item, offset+index, width))
+	}
+	return m.styles.FeaturePanel.Width(width).Render(strings.Join(lines, "\n"))
+}
+
+func (m Model) renderFeatureModalRow(item configFeatureModalItem, index int, width int) string {
+	label := item.id
+	detail := item.id
+	action := "enter add"
+	switch item.kind {
+	case configFeatureModalConfigured:
+		label = item.id
+		options := featureOptionsString(item.options)
+		if options != "" {
+			detail = options
+		} else {
+			detail = "No options configured"
+		}
+		action = "enter edit options  del remove"
+	case configFeatureModalManual:
+		label = "Add typed feature ID"
+	case configFeatureModalCatalog:
+		if item.name != "" {
+			label = item.name
+		}
+	}
+	label = truncate(label, width-16)
+	detail = truncate(detail, width-16)
+	action = truncate(action, 34)
+	row := fmt.Sprintf("%s\n%s", m.styles.Name.Render(label), m.styles.Path.Render(detail))
+	if index == m.featureCursor {
+		return "> " + m.styles.SelectedRow.Width(width-5).Render(" "+row+"  "+action)
+	}
+	return "  " + m.styles.FeatureRow.Width(width-5).Render(row+"  "+m.styles.Subtle.Render(action))
 }
 
 func (m Model) renderConfigCandidateModal() string {

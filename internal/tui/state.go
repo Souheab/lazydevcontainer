@@ -355,28 +355,82 @@ func (m Model) configuredFeatureIDs() []string {
 func (m Model) featureModalItems() []configFeatureModalItem {
 	configured := m.configuredFeatureIDs()
 	manualID := strings.TrimSpace(m.featureSearchInput.Value())
+	query := strings.TrimSpace(m.featureQuery)
 	items := make([]configFeatureModalItem, 0, len(configured)+len(m.visibleFeatures)+1)
-	if manualID != "" {
-		items = append(items, configFeatureModalItem{
-			kind: configFeatureModalManual,
-			id:   manualID,
-		})
-	}
+	configuredSet := make(map[string]bool, len(configured))
 	for _, id := range configured {
+		configuredSet[id] = true
+	}
+
+	seen := map[string]bool{}
+	appendConfigured := func(id string) {
+		if seen[id] {
+			return
+		}
+		seen[id] = true
 		items = append(items, configFeatureModalItem{
 			kind:    configFeatureModalConfigured,
 			id:      id,
 			options: m.configDoc.Features[id],
 		})
 	}
-	for _, feature := range m.visibleFeatures {
+	appendCatalog := func(feature devconfig.Feature) {
+		if seen[feature.ID] {
+			return
+		}
+		seen[feature.ID] = true
 		items = append(items, configFeatureModalItem{
 			kind: configFeatureModalCatalog,
 			id:   feature.ID,
 			name: feature.Name,
 		})
 	}
+
+	for _, id := range configured {
+		if query == "" || m.configuredFeatureMatchesQuery(id, query) {
+			appendConfigured(id)
+		}
+	}
+	for _, feature := range m.visibleFeatures {
+		if configuredSet[feature.ID] {
+			continue
+		}
+		appendCatalog(feature)
+	}
+	if manualID != "" && !seen[manualID] {
+		items = append(items, configFeatureModalItem{
+			kind: configFeatureModalManual,
+			id:   manualID,
+		})
+	}
 	return items
+}
+
+func (m Model) configuredFeatureMatchesQuery(id string, query string) bool {
+	terms := strings.Fields(strings.ToLower(query))
+	if len(terms) == 0 {
+		return true
+	}
+	haystack := strings.ToLower(strings.Join([]string{
+		id,
+		featureOptionsString(m.configDoc.Features[id]),
+		m.featureCatalogName(id),
+	}, " "))
+	for _, term := range terms {
+		if !strings.Contains(haystack, term) {
+			return false
+		}
+	}
+	return true
+}
+
+func (m Model) featureCatalogName(id string) string {
+	for _, feature := range m.featureCatalog {
+		if feature.ID == id {
+			return feature.Name
+		}
+	}
+	return ""
 }
 
 func (m Model) selectedContainer() (domain.Container, bool) {
@@ -637,7 +691,7 @@ func (m *Model) ensureConfigCursorVisible() {
 }
 
 func (m *Model) ensureFeatureCursorVisible() {
-	rows := max(1, m.visibleRowCount())
+	rows := max(1, (max(14, min(30, m.height-6))-16)/2)
 	if m.featureCursor < m.featureOffset {
 		m.featureOffset = m.featureCursor
 	}

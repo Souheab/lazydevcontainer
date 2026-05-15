@@ -249,7 +249,7 @@ func New(provider ContainerService) Model {
 	configInput.Blur()
 
 	featureSearchInput := textinput.New()
-	featureSearchInput.Prompt = "/ "
+	featureSearchInput.Prompt = ""
 	featureSearchInput.Placeholder = "feature ID, name, or manual ghcr.io/..."
 	featureSearchInput.CharLimit = 512
 	featureSearchInput.PromptStyle = styles.Subtle

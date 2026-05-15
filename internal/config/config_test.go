@@ -143,6 +143,32 @@ func TestFeatureCatalogUsesCacheWhenOnlineLoadFails(t *testing.T) {
 	}
 }
 
+func TestParseFeatureCatalogExtractsCodeReferences(t *testing.T) {
+	html := `
+<table>
+  <tr>
+    <td><a>Go</a></td>
+    <td><code>ghcr.io/devcontainers/features/go:1</code></td>
+  </tr>
+  <tr>
+    <td><a>Node.js</a></td>
+    <td><code>ghcr.io/devcontainers/features/node:2</code></td>
+  </tr>
+</table>`
+
+	features := parseFeatureCatalog(html)
+
+	if len(features) != 2 {
+		t.Fatalf("features = %+v, want 2 parsed features", features)
+	}
+	if features[0].ID != "ghcr.io/devcontainers/features/go:1" || features[0].Name != "Go" {
+		t.Fatalf("first feature = %+v", features[0])
+	}
+	if features[1].ID != "ghcr.io/devcontainers/features/node:2" || features[1].Name != "Node" {
+		t.Fatalf("second feature = %+v", features[1])
+	}
+}
+
 func TestSearchFeaturesMatchesEveryTerm(t *testing.T) {
 	features := []Feature{
 		{ID: "ghcr.io/devcontainers/features/go:1", Name: "Go"},

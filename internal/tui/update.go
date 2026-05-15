@@ -20,7 +20,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.searchInput.Width = max(10, min(56, msg.Width-12))
 		m.templateSearchInput.Width = max(10, min(56, msg.Width-12))
 		m.configInput.Width = max(10, min(64, msg.Width-12))
-		m.featureSearchInput.Width = max(10, min(72, msg.Width-12))
+		m.featureSearchInput.Width = max(10, min(98, msg.Width-18))
 		m.ensureCursorVisible()
 		m.ensureTemplateCursorVisible()
 		m.ensureConfigCursorVisible()
@@ -506,7 +506,7 @@ func (m Model) updateConfigFeatureModal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, m.keys.PageDown):
 		m.moveFeatureCursor(5)
 		return m, nil
-	case key.Matches(msg, m.keys.Delete):
+	case msg.Type == tea.KeyDelete:
 		items := m.featureModalItems()
 		if m.featureCursor < 0 || m.featureCursor >= len(items) || items[m.featureCursor].kind != configFeatureModalConfigured {
 			m.setActionError("Select a configured feature to remove")

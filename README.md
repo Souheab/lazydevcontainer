@@ -120,6 +120,9 @@ make vet
 make build
 ```
 
+## Pending fixes
+ - On features modal j/k for input means can't input those charcters in search
+
 ## Future development roadmap
 
 Features being considered for future implementation:

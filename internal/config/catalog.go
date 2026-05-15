@@ -16,7 +16,7 @@ import (
 
 const featureCatalogURL = "https://containers.dev/features"
 
-var featureRefPattern = regexp.MustCompile("`(ghcr\\.io/[^`]+)`")
+var featureRefPattern = regexp.MustCompile(`ghcr\.io/[^\s<` + "`" + `]+`)
 
 // Feature describes a Dev Container Feature displayed by the editor.
 type Feature struct {
@@ -97,11 +97,11 @@ func fetchFeatureCatalog(ctx context.Context, client *http.Client) ([]Feature, e
 }
 
 func parseFeatureCatalog(html string) []Feature {
-	matches := featureRefPattern.FindAllStringSubmatch(html, -1)
+	matches := featureRefPattern.FindAllString(html, -1)
 	seen := map[string]bool{}
 	features := make([]Feature, 0, len(matches))
 	for _, match := range matches {
-		id := strings.TrimSpace(match[1])
+		id := strings.TrimSpace(match)
 		if id == "" || seen[id] {
 			continue
 		}
