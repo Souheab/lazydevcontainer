@@ -171,3 +171,4 @@ Features being considered for future implementation:
 - Better modal UI/UX
 - Devcontainer.json editor (Add features/configurations)
 - All actions modal menu
+- When editing feature options provide a list of options that might be commonly used
